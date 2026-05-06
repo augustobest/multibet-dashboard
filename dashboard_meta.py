@@ -728,7 +728,7 @@ def main():
             df_show = df_show[df_show["Status"] == "Pausada"]
 
         # Colunas essenciais para mobile
-        cols_main = ["UTM Campaign", "Status", "FTDs", "CPA Real (R$)", "Investido (R$)", "Net PL (R$)", "ROAS Net PL"]
+        cols_main = ["UTM Campaign", "Status", "FTDs", "FTD Valor (R$)", "CPA Real (R$)", "Investido (R$)", "Net Deposits (R$)", "Depósitos Bruto (R$)", "Net PL (R$)", "ROAS Net PL"]
         df_display = df_show[[c for c in cols_main if c in df_show.columns]].copy()
 
         def _color_roi(val):
@@ -744,7 +744,7 @@ def main():
             return "color: #00ff88; font-weight:bold" if val == "Ativa" else "color: #888"
 
         fmt = {}
-        for col in ["Investido (R$)", "Net PL (R$)"]:
+        for col in ["Investido (R$)", "Net PL (R$)", "Net Deposits (R$)", "Depósitos Bruto (R$)", "FTD Valor (R$)"]:
             if col in df_display.columns:
                 fmt[col] = lambda v: brl(v)
         if "CPA Real (R$)" in df_display.columns:
