@@ -606,7 +606,7 @@ def main():
     with st.sidebar:
         st.markdown("<h2 style='color:#f7f716'>⚙️ Filtros</h2>", unsafe_allow_html=True)
         today = datetime.today().date()
-        default_from = today - timedelta(days=DEFAULT_DAYS - 1)
+        default_from = today
 
         date_range = st.date_input("Período", value=(default_from, today), max_value=today)
         if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
