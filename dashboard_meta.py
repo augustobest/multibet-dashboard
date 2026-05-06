@@ -42,14 +42,27 @@ DEFAULT_DAYS = 15
 
 # Campanha Meta → UTMs no Smartico
 META_CAMPAIGN_UTM_MAP: dict[str, list[str]] = {
-    "Deposite e ganhe ROAS":       ["modal-dep-100-roas", "modal-dep-100"],
-    "Deposite e ganhe Motions":    ["modal-dep-100-motion"],
-    "Mini Games Motion":           ["caixas-dep-50"],
-    "CBO - ASSINATURA - RMKT":     [],
-    "Josiasbr":                    ["AD1_JosiasGaloodd13", "AD2_JosiasEstico"],
-    "RMK Meta Sport":              ["RMKMETASports"],
-    "Remarketing Google":          ["rmkt"],
-    "Venda Sports ODD10 Cruxcat":  ["AD1_Estaticocaiocru", "AD1_Estaticocaiogaloac2"],
+    "Deposite e ganhe ROAS":          ["modal-dep-100-roas", "modal-dep-100"],
+    "Deposite e ganhe Motions":       ["modal-dep-100-motion"],
+    "Mini Games Motion":              ["caixas-dep-50", "raspadinha-dep-50"],
+    "Mini Games Roleta estáticos":    ["roleta-dep-50"],
+    "CBO - ASSINATURA - RMKT":        [],
+    "Josiasbr":                       ["AD1_JosiasGaloodd13", "AD2_JosiasEstico",
+                                       "AD1_JosiasAlemanha", "AD2_JosiasAlemanha",
+                                       "AD1_JosiasAlemanha1", "AD1_JosiasBRCR31",
+                                       "josiasteste"],
+    "RMK Meta Sport":                 ["RMKMETASports"],
+    "Remarketing Google":             ["rmkt"],
+    "Venda Sports ODD10 Cruxcat":     ["AD1_Estaticocaiocru", "AD1_Estaticocaiogaloac2",
+                                       "AD1_Estaticocaioflaac3", "AD1_Estaticocaiogaloac1",
+                                       "estaticocaioflaac1"],
+    "Ale Galo ODD 13":                ["AD2_Alegalo13"],
+    "Ale":                            ["AD1_aleac4", "AD6_aleac3", "AD1_Ale0605",
+                                       "AD1_Alefla", "AD1_Aleflaac1", "AD1_Ale"],
+    "Brabo+Multi Odds":               ["Braboflaodd10", "braboflaac1", "AD2_braboac4",
+                                       "brabocru", "BraboGordinhoODD10", "Brabopalvsathe",
+                                       "Brabopalmodd13", "Brabocollabflu"],
+    "Lead AFF — Cópia":               [],
 }
 
 # UTMs do Smartico que devem ser mescladas sob uma chave canônica
