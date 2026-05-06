@@ -727,11 +727,9 @@ def main():
         elif tipo_filter == "Só pausadas":
             df_show = df_show[df_show["Status"] == "Pausada"]
 
-        cols_show = ["Campanha Meta", "UTM Campaign", "Status", "Investido (R$)", "FTDs",
-                     "CPA Real (R$)", "Net PL (R$)", "ROAS Net PL", "ROI",
-                     "Registros", "Net Deposits (R$)", "Depósitos Bruto (R$)",
-                     "Impressões", "Cliques", "CTR (%)"]
-        df_display = df_show[[c for c in cols_show if c in df_show.columns]].copy()
+        # Colunas essenciais para mobile
+        cols_main = ["UTM Campaign", "Status", "FTDs", "CPA Real (R$)", "Investido (R$)", "Net PL (R$)", "ROAS Net PL"]
+        df_display = df_show[[c for c in cols_main if c in df_show.columns]].copy()
 
         def _color_roi(val):
             if val is None or not isinstance(val, (int, float)) or math.isnan(val):
@@ -746,28 +744,24 @@ def main():
             return "color: #00ff88; font-weight:bold" if val == "Ativa" else "color: #888"
 
         fmt = {}
-        for col in ["Investido (R$)", "Net PL (R$)", "Net Deposits (R$)", "Depósitos Bruto (R$)", "FTD Valor (R$)"]:
+        for col in ["Investido (R$)", "Net PL (R$)"]:
             if col in df_display.columns:
                 fmt[col] = lambda v: brl(v)
-        for col in ["CPA Real (R$)", "CPC (R$)"]:
-            if col in df_display.columns:
-                fmt[col] = lambda v: brl(v) if v is not None else "—"
-        for col in ["ROAS Net PL", "ROI", "ROAS Dep Amount"]:
-            if col in df_display.columns:
-                fmt[col] = lambda v: f"{v:.2f}x" if v is not None else "—"
-        if "CTR (%)" in df_display.columns:
-            fmt["CTR (%)"] = lambda v: pct(v) if v is not None else "—"
+        if "CPA Real (R$)" in df_display.columns:
+            fmt["CPA Real (R$)"] = lambda v: brl(v) if v is not None else "—"
+        if "ROAS Net PL" in df_display.columns:
+            fmt["ROAS Net PL"] = lambda v: f"{v:.2f}x" if v is not None else "—"
 
         styled = df_display.style
-        if "ROI" in df_display.columns:
-            styled = styled.map(_color_roi, subset=["ROI"])
+        if "ROAS Net PL" in df_display.columns:
+            styled = styled.map(_color_roi, subset=["ROAS Net PL"])
         if "Status" in df_display.columns:
             styled = styled.map(_color_status, subset=["Status"])
         styled = styled.format(fmt, na_rep="—")
 
-        st.dataframe(styled, use_container_width=True)
+        st.dataframe(styled, use_container_width=True, hide_index=True)
         csv = df_show.to_csv(index=False).encode("utf-8")
-        st.download_button("📥 Exportar CSV", csv, "multibet_utm_analysis.csv", "text/csv")
+        st.download_button("📥 Exportar CSV completo", csv, "multibet_utm_analysis.csv", "text/csv")
 
     else:
         st.info("Sem dados Meta para o período selecionado.")
