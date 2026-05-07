@@ -42,27 +42,35 @@ DEFAULT_DAYS = 15
 
 # Campanha Meta → UTMs no Smartico
 META_CAMPAIGN_UTM_MAP: dict[str, list[str]] = {
-    "Deposite e ganhe ROAS":          ["modal-dep-100-roas", "modal-dep-100"],
-    "Deposite e ganhe Motions":       ["modal-dep-100-motion"],
-    "Mini Games Motion":              ["caixas-dep-50", "raspadinha-dep-50"],
-    "Mini Games Roleta estáticos":    ["roleta-dep-50"],
-    "CBO - ASSINATURA - RMKT":        [],
-    "Josiasbr":                       ["AD1_JosiasGaloodd13", "AD2_JosiasEstico",
-                                       "AD1_JosiasAlemanha", "AD2_JosiasAlemanha",
-                                       "AD1_JosiasAlemanha1", "AD1_JosiasBRCR31",
-                                       "josiasteste"],
-    "RMK Meta Sport":                 ["RMKMETASports"],
-    "Remarketing Google":             ["rmkt"],
-    "Venda Sports ODD10 Cruxcat":     ["AD1_Estaticocaiocru", "AD1_Estaticocaiogaloac2",
-                                       "AD1_Estaticocaioflaac3", "AD1_Estaticocaiogaloac1",
-                                       "estaticocaioflaac1"],
-    "Ale Galo ODD 13":                ["AD2_Alegalo13"],
-    "Ale":                            ["AD1_aleac4", "AD6_aleac3", "AD1_Ale0605",
-                                       "AD1_Alefla", "AD1_Aleflaac1", "AD1_Ale"],
-    "Brabo+Multi Odds":               ["Braboflaodd10", "braboflaac1", "AD2_braboac4",
-                                       "brabocru", "BraboGordinhoODD10", "Brabopalvsathe",
-                                       "Brabopalmodd13", "Brabocollabflu"],
-    "Lead AFF — Cópia":               [],
+    "Deposite e ganhe ROAS":                          ["modal-dep-100-roas", "modal-dep-100"],
+    "Deposite e ganhe Motions":                       ["modal-dep-100-motion"],
+    "Mini Games Motion":                              ["caixas-dep-50", "raspadinha-dep-50"],
+    "Mini Games Roleta estáticos":                    ["roleta-dep-50"],
+    "Mini Games Roleta estáticos — Cópia":            ["roleta-dep-50"],
+    "Mini Games Roleta estáticos — Cópia — Cópia":    ["roleta-dep-50"],
+    "Mini Games":                                     ["roleta-dep-50"],
+    "Mini Game":                                      ["roleta-dep-50"],
+    "Mini games Raspadinha":                          ["raspadinha-dep-100"],
+    "Mini games Raspadinha — Cópia":                  ["raspadinha-dep-100"],
+    "Mini Games caixa":                               ["caixas-dep-50"],
+    "Mini Games Videos Lara":                         [],
+    "CBO - ASSINATURA - RMKT":                        [],
+    "Josiasbr":                                       ["AD1_JosiasGaloodd13", "AD2_JosiasEstico",
+                                                       "AD1_JosiasAlemanha", "AD2_JosiasAlemanha",
+                                                       "AD1_JosiasAlemanha1", "AD1_JosiasBRCR31",
+                                                       "josiasteste"],
+    "RMK Meta Sport":                                 ["RMKMETASports"],
+    "Remarketing Google":                             ["rmkt"],
+    "Venda Sports ODD10 Cruxcat":                     ["AD1_Estaticocaiocru", "AD1_Estaticocaiogaloac2",
+                                                       "AD1_Estaticocaioflaac3", "AD1_Estaticocaiogaloac1",
+                                                       "estaticocaioflaac1"],
+    "Ale Galo ODD 13":                                ["AD2_Alegalo13"],
+    "Ale":                                            ["AD1_aleac4", "AD6_aleac3", "AD1_Ale0605",
+                                                       "AD1_Alefla", "AD1_Aleflaac1", "AD1_Ale"],
+    "Brabo+Multi Odds":                               ["Braboflaodd10", "braboflaac1", "AD2_braboac4",
+                                                       "brabocru", "BraboGordinhoODD10", "Brabopalvsathe",
+                                                       "Brabopalmodd13", "Brabocollabflu"],
+    "Lead AFF — Cópia":                               [],
 }
 
 # UTMs do Smartico que devem ser mescladas sob uma chave canônica
@@ -373,14 +381,19 @@ def fetch_meta_daily(date_from_str: str, date_to_str: str) -> pd.DataFrame:
 # RECONCILIATION
 # ─────────────────────────────────────────────
 def reconcile(sm: dict, meta: list[dict]) -> tuple[pd.DataFrame, pd.DataFrame]:
-    camp_agg: dict[str, dict] = defaultdict(lambda: {
+    # Agrupa por chave = tupla(utms ordenadas) — campanhas com mesma UTM viram uma linha
+    group_agg: dict[tuple, dict] = defaultdict(lambda: {
         "spend": 0.0, "impressions": 0, "clicks": 0, "reach": 0,
         "frequency_sum": 0.0, "frequency_count": 0, "actions": {},
+        "campaigns": set(),
     })
 
     for row in meta:
         camp = row.get("campaign_name", "")
-        agg = camp_agg[camp]
+        utms = META_CAMPAIGN_UTM_MAP.get(camp, [camp])
+        key = tuple(sorted(utms)) if utms else (camp,)
+        agg = group_agg[key]
+        agg["campaigns"].add(camp)
         agg["spend"]       += float(row.get("spend") or 0)
         agg["impressions"] += int(row.get("impressions") or 0)
         agg["clicks"]      += int(row.get("clicks") or 0)
@@ -401,8 +414,13 @@ def reconcile(sm: dict, meta: list[dict]) -> tuple[pd.DataFrame, pd.DataFrame]:
     matched_utms: set[str] = set()
     rows_main = []
 
-    for camp, agg in camp_agg.items():
-        utms = META_CAMPAIGN_UTM_MAP.get(camp, [camp])
+    for key, agg in group_agg.items():
+        utms = list(key)
+        camps_list = sorted(agg["campaigns"])
+        if len(camps_list) == 1:
+            camp = camps_list[0]
+        else:
+            camp = f"{camps_list[0]} (+{len(camps_list)-1})"
         matched_utms.update(utms)
 
         sm_ftds         = sum(sm.get(u, {}).get("ftd_count", 0) for u in utms)
@@ -501,7 +519,16 @@ def build_unified_utm_table(df: pd.DataFrame, budgets: dict) -> pd.DataFrame:
     if df.empty:
         return df
     df = df.copy()
-    df["Status"]           = df["Campanha Meta"].map(lambda c: budgets.get(c, {}).get("status", "—"))
+
+    def _status(row):
+        camp = row["Campanha Meta"]
+        spend = row.get("Investido (R$)", 0) or 0
+        # Campanhas agrupadas (com "(+N)") ou que tiveram gasto no período → Ativa
+        if "(+" in str(camp) or spend > 0:
+            return "Ativa"
+        return budgets.get(camp, {}).get("status", "—")
+
+    df["Status"]           = df.apply(_status, axis=1)
     df["Orçamento Diário"] = df["Campanha Meta"].map(lambda c: budgets.get(c, {}).get("budget"))
     df["Status"] = df["Status"].fillna("—")
     return df
