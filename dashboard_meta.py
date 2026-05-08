@@ -43,18 +43,22 @@ DEFAULT_DAYS = 15
 
 # Campanha Meta → UTMs no Smartico
 META_CAMPAIGN_UTM_MAP: dict[str, list[str]] = {
-    "Deposite e ganhe ROAS":                          ["modal-dep-100-roas", "modal-dep-100"],
+    "Deposite e ganhe ROAS":                          ["modal-dep-100"],
     "Deposite e ganhe Motions":                       ["modal-dep-100-motion"],
-    "Mini Games Motion":                              ["caixas-dep-50", "raspadinha-dep-50"],
+    "Mini Games Motion":                              ["caixas", "raspadinha"],
     "Mini Games Roleta estáticos":                    ["roleta-dep-50"],
     "Mini Games Roleta estáticos — Cópia":            ["roleta-dep-50"],
     "Mini Games Roleta estáticos — Cópia — Cópia":    ["roleta-dep-50"],
     "Mini Games":                                     ["roleta-dep-50"],
     "Mini Game":                                      ["roleta-dep-50"],
-    "Mini games Raspadinha":                          ["raspadinha-dep-100"],
-    "Mini games Raspadinha — Cópia":                  ["raspadinha-dep-100"],
-    "Mini Games caixa":                               ["caixas-dep-50"],
-    "Mini Games Videos Lara":                         [],
+    "Mini games 2":                                   ["roleta-dep-50"],
+    "Mini games Raspadinha":                          ["raspadinha"],
+    "Mini games Raspadinha — Cópia":                  ["raspadinha"],
+    "Mini Games caixa":                               ["caixas"],
+    "Mini Games Videos Lara":                         ["Lara5reais"],
+    "Thiago ODD Domingo":                             ["AD1_ThiagoVascoagama", "AD1_ThiagoPalmeirasvsAthet",
+                                                       "AD1_ThiagoVa", "AD1_ThiagoVasco", "ThiagoBrasil",
+                                                       "Thiagopxa", "botafogoflamengothiago"],
     "CBO - ASSINATURA - RMKT":                        [],
     "Josiasbr":                                       ["AD1_JosiasGaloodd13", "AD2_JosiasEstico",
                                                        "AD1_JosiasAlemanha", "AD2_JosiasAlemanha",
@@ -75,7 +79,11 @@ META_CAMPAIGN_UTM_MAP: dict[str, list[str]] = {
 }
 
 # UTMs do Smartico que devem ser mescladas sob uma chave canônica
-SM_AGGREGATE: dict[str, list[str]] = {}
+SM_AGGREGATE: dict[str, list[str]] = {
+    "modal-dep-100": ["modal-dep-100", "modal-dep-100-roas"],
+    "raspadinha":    ["raspadinha-dep-100", "raspadinha-dep-50"],
+    "caixas":        ["caixas-dep-50"],
+}
 
 # Ações já resolvidas (não re-alertar)
 RESOLVED_ACTIONS: list[dict] = []
