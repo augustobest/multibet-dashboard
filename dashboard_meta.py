@@ -59,6 +59,8 @@ META_CAMPAIGN_UTM_MAP: dict[str, list[str]] = {
     "Thiago ODD Domingo":                             ["AD1_ThiagoVascoagama", "AD1_ThiagoPalmeirasvsAthet",
                                                        "AD1_ThiagoVa", "AD1_ThiagoVasco", "ThiagoBrasil",
                                                        "Thiagopxa", "botafogoflamengothiago"],
+    "Estático Vasco":                                 ["estaticocaiovasco"],
+    "CBO - ROLETA - MINI GAMES 08/07":                ["roleta-dep-50"],
     "CBO - ASSINATURA - RMKT":                        [],
     "Josiasbr":                                       ["AD1_JosiasGaloodd13", "AD2_JosiasEstico",
                                                        "AD1_JosiasAlemanha", "AD2_JosiasAlemanha",
