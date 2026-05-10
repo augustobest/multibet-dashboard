@@ -395,62 +395,62 @@ def fetch_meta_daily(date_from_str: str, date_to_str: str) -> pd.DataFrame:
 # RECONCILIATION
 # ─────────────────────────────────────────────
 def reconcile(sm: dict, meta: list[dict]) -> tuple[pd.DataFrame, pd.DataFrame]:
-    # Agrupa por chave = tupla(utms ordenadas) — campanhas com mesma UTM viram uma linha
-    group_agg: dict[tuple, dict] = defaultdict(lambda: {
+    # Agrupa por UTM individual. Gasto Meta de campanhas com várias UTMs é
+    # rateado igualmente entre elas para evitar dupla contagem.
+    utm_agg: dict[str, dict] = defaultdict(lambda: {
         "spend": 0.0, "impressions": 0, "clicks": 0, "reach": 0,
-        "frequency_sum": 0.0, "frequency_count": 0, "actions": {},
+        "frequency_sum": 0.0, "frequency_count": 0,
         "campaigns": set(),
     })
 
     for row in meta:
         camp = row.get("campaign_name", "")
         utms = META_CAMPAIGN_UTM_MAP.get(camp, [camp])
-        key = tuple(sorted(utms)) if utms else (camp,)
-        agg = group_agg[key]
-        agg["campaigns"].add(camp)
-        agg["spend"]       += float(row.get("spend") or 0)
-        agg["impressions"] += int(row.get("impressions") or 0)
-        agg["clicks"]      += int(row.get("clicks") or 0)
-        agg["reach"]       += int(row.get("reach") or 0)
-        if row.get("frequency"):
-            agg["frequency_sum"]   += float(row["frequency"])
-            agg["frequency_count"] += 1
-        for a in (row.get("actions") or []):
-            at = a.get("action_type", "")
-            agg["actions"][at] = agg["actions"].get(at, 0) + int(float(a.get("value", 0)))
-
-    def get_action(agg, *types):
-        for t in types:
-            if t in agg["actions"]:
-                return agg["actions"][t]
-        return 0
+        if not utms:
+            utms = ["(sem_utm)"]
+        n = len(utms)
+        spend = float(row.get("spend") or 0) / n
+        impr  = float(row.get("impressions") or 0) / n
+        clicks = float(row.get("clicks") or 0) / n
+        reach = float(row.get("reach") or 0) / n
+        for u in utms:
+            agg = utm_agg[u]
+            agg["campaigns"].add(camp)
+            agg["spend"]       += spend
+            agg["impressions"] += impr
+            agg["clicks"]      += clicks
+            agg["reach"]       += reach
+            if row.get("frequency"):
+                agg["frequency_sum"]   += float(row["frequency"])
+                agg["frequency_count"] += 1
 
     matched_utms: set[str] = set()
     rows_main = []
 
-    for key, agg in group_agg.items():
-        utms = list(key)
+    for utm, agg in utm_agg.items():
+        if utm == "(sem_utm)": continue
         camps_list = sorted(agg["campaigns"])
         if len(camps_list) == 1:
             camp = camps_list[0]
         else:
             camp = f"{camps_list[0]} (+{len(camps_list)-1})"
-        matched_utms.update(utms)
+        matched_utms.add(utm)
 
-        sm_ftds         = sum(sm.get(u, {}).get("ftd_count", 0) for u in utms)
-        sm_regs         = sum(sm.get(u, {}).get("registration_count", 0) for u in utms)
-        sm_ftd_total    = sum(sm.get(u, {}).get("ftd_total", 0) for u in utms)
-        sm_net_pl       = sum(sm.get(u, {}).get("net_pl", 0) for u in utms)
-        sm_net_pl_casino= sum(sm.get(u, {}).get("net_pl_casino", 0) for u in utms)
-        sm_net_pl_sport = sum(sm.get(u, {}).get("net_pl_sport", 0) for u in utms)
-        sm_net_deposits = sum(sm.get(u, {}).get("net_deposits", 0) for u in utms)
-        sm_deposits     = sum(sm.get(u, {}).get("deposit_total", 0) for u in utms)
-        sm_bonus        = sum(sm.get(u, {}).get("bonus_amount", 0) for u in utms)
-        sm_comm         = sum(sm.get(u, {}).get("commissions_total", 0) for u in utms)
+        smd = sm.get(utm, {})
+        sm_ftds          = smd.get("ftd_count", 0)
+        sm_regs          = smd.get("registration_count", 0)
+        sm_ftd_total     = smd.get("ftd_total", 0)
+        sm_net_pl        = smd.get("net_pl", 0)
+        sm_net_pl_casino = smd.get("net_pl_casino", 0)
+        sm_net_pl_sport  = smd.get("net_pl_sport", 0)
+        sm_net_deposits  = smd.get("net_deposits", 0)
+        sm_deposits      = smd.get("deposit_total", 0)
+        sm_bonus         = smd.get("bonus_amount", 0)
+        sm_comm          = smd.get("commissions_total", 0)
 
         spend = agg["spend"]
-        impr  = agg["impressions"]
-        clicks = agg["clicks"]
+        impr  = int(agg["impressions"])
+        clicks = int(agg["clicks"])
         freq  = agg["frequency_sum"] / agg["frequency_count"] if agg["frequency_count"] > 0 else None
 
         cpa_real    = spend / sm_ftds if sm_ftds > 0 and spend > 0 else None
@@ -461,13 +461,13 @@ def reconcile(sm: dict, meta: list[dict]) -> tuple[pd.DataFrame, pd.DataFrame]:
 
         rows_main.append({
             "Campanha Meta":        camp,
-            "UTM Campaign":         " + ".join(utms) if utms else "(sem_utm)",
+            "UTM Campaign":         utm,
             "Investido (R$)":       spend,
             "Impressões":           impr,
             "Cliques":              clicks,
             "CTR (%)":              ctr,
             "CPC (R$)":             cpc,
-            "Alcance":              agg["reach"],
+            "Alcance":              int(agg["reach"]),
             "Frequência":           freq,
             "Registros":            int(sm_regs),
             "FTDs":                 int(sm_ftds),
