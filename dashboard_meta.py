@@ -395,34 +395,44 @@ def fetch_meta_daily(date_from_str: str, date_to_str: str) -> pd.DataFrame:
 # RECONCILIATION
 # ─────────────────────────────────────────────
 def reconcile(sm: dict, meta: list[dict]) -> tuple[pd.DataFrame, pd.DataFrame]:
-    # Agrupa por UTM individual. Gasto Meta de campanhas com várias UTMs é
-    # rateado igualmente entre elas para evitar dupla contagem.
+    # Agrupa por UTM individual. Cada campanha aporta gasto INTEIRO em todas
+    # as UTMs que ela mapeia. Quando várias campanhas compartilham uma UTM,
+    # o gasto soma. FTDs vêm da Smartico (uma vez por UTM, sem dupla contagem).
+    # Primeiro acumula por campanha (insights vêm a nível de adset)
+    camp_agg: dict[str, dict] = defaultdict(lambda: {
+        "spend": 0.0, "impressions": 0, "clicks": 0, "reach": 0,
+        "frequency_sum": 0.0, "frequency_count": 0,
+    })
+    for row in meta:
+        camp = row.get("campaign_name", "")
+        c = camp_agg[camp]
+        c["spend"]       += float(row.get("spend") or 0)
+        c["impressions"] += int(row.get("impressions") or 0)
+        c["clicks"]      += int(row.get("clicks") or 0)
+        c["reach"]       += int(row.get("reach") or 0)
+        if row.get("frequency"):
+            c["frequency_sum"]   += float(row["frequency"])
+            c["frequency_count"] += 1
+
+    # Agora distribui gasto INTEIRO de cada campanha pra cada UTM mapeada
     utm_agg: dict[str, dict] = defaultdict(lambda: {
         "spend": 0.0, "impressions": 0, "clicks": 0, "reach": 0,
         "frequency_sum": 0.0, "frequency_count": 0,
         "campaigns": set(),
     })
-
-    for row in meta:
-        camp = row.get("campaign_name", "")
+    for camp, c in camp_agg.items():
         utms = META_CAMPAIGN_UTM_MAP.get(camp, [camp])
         if not utms:
             utms = ["(sem_utm)"]
-        n = len(utms)
-        spend = float(row.get("spend") or 0) / n
-        impr  = float(row.get("impressions") or 0) / n
-        clicks = float(row.get("clicks") or 0) / n
-        reach = float(row.get("reach") or 0) / n
         for u in utms:
             agg = utm_agg[u]
             agg["campaigns"].add(camp)
-            agg["spend"]       += spend
-            agg["impressions"] += impr
-            agg["clicks"]      += clicks
-            agg["reach"]       += reach
-            if row.get("frequency"):
-                agg["frequency_sum"]   += float(row["frequency"])
-                agg["frequency_count"] += 1
+            agg["spend"]       += c["spend"]
+            agg["impressions"] += c["impressions"]
+            agg["clicks"]      += c["clicks"]
+            agg["reach"]       += c["reach"]
+            agg["frequency_sum"]   += c["frequency_sum"]
+            agg["frequency_count"] += c["frequency_count"]
 
     matched_utms: set[str] = set()
     rows_main = []
@@ -687,12 +697,14 @@ def main():
         df_unified = build_unified_utm_table(df_main, campaign_budgets)
 
     # ── KPIs ──────────────────────────────────
-    total_spend    = df_unified["Investido (R$)"].sum() if not df_unified.empty else 0
-    total_regs     = df_unified["Registros"].sum() if not df_unified.empty else 0
+    # Custo Total = soma direta dos insights Meta (sem inflar por UTMs duplicadas)
+    total_spend = sum(float(r.get("spend") or 0) for r in meta_insights)
+    # Net PL e depósitos = soma direta do Smartico (sem inflar)
+    total_net_pl   = sum(v.get("net_pl", 0) for v in sm_data.values())
+    total_net_dep  = sum(v.get("net_deposits", 0) for v in sm_data.values())
+    total_deposits = sum(v.get("deposit_total", 0) for v in sm_data.values())
+    total_regs     = sum(v.get("registration_count", 0) for v in sm_data.values())
     total_ftds     = df_unified["FTDs"].sum() if not df_unified.empty else 0
-    total_net_pl   = df_unified["Net PL (R$)"].sum() if not df_unified.empty else 0
-    total_net_dep  = df_unified["Net Deposits (R$)"].sum() if not df_unified.empty else 0
-    total_deposits = df_unified["Depósitos Bruto (R$)"].sum() if not df_unified.empty else 0
     cpa_real       = total_spend / total_ftds if total_ftds > 0 and total_spend > 0 else None
     roas_val       = total_net_pl / total_spend if total_spend > 0 else None
 
