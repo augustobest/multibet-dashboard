@@ -444,6 +444,15 @@ def reconcile(sm: dict, meta: list[dict]) -> tuple[pd.DataFrame, pd.DataFrame]:
             camp = camps_list[0]
         else:
             camp = f"{camps_list[0]} (+{len(camps_list)-1})"
+
+        spend = agg["spend"]
+        # UTM mapeada mas sem gasto Meta no período = atribuição residual
+        # (anúncio pausado/deletado, FTD atrasado). Pula a tabela principal
+        # e deixa cair na seção "sem match Meta" abaixo, junto das outras
+        # UTMs sem custo — assim o CPA da tabela principal fica limpo.
+        if spend <= 0:
+            continue
+
         matched_utms.add(utm)
 
         smd = sm.get(utm, {})
@@ -458,7 +467,6 @@ def reconcile(sm: dict, meta: list[dict]) -> tuple[pd.DataFrame, pd.DataFrame]:
         sm_bonus         = smd.get("bonus_amount", 0)
         sm_comm          = smd.get("commissions_total", 0)
 
-        spend = agg["spend"]
         impr  = int(agg["impressions"])
         clicks = int(agg["clicks"])
         freq  = agg["frequency_sum"] / agg["frequency_count"] if agg["frequency_count"] > 0 else None
