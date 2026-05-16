@@ -56,8 +56,9 @@ META_CAMPAIGN_UTM_MAP: dict[str, list[str]] = {
     "Mini games Raspadinha — Cópia":                  ["raspadinha"],
     "Mini Games caixa":                               ["caixas"],
     "Mini Games Videos Lara":                         ["Lara5reais"],
-    "Thiago ODD Domingo":                             ["AD1_ThiagoVascoagama", "AD1_ThiagoPalmeirasvsAthet"],
+    "Thiago ODD Domingo":                             ["AD1_ThiagoVascoagama", "AD1_ThiagoPalmeirasvsAthet", "AD1_ThiagoPalmeirasxCruzeiro"],
     "Estático Vasco":                                 ["estaticocaiovasco"],
+    "Estático Palmeiras e Cruzeiro":                  ["estaticocaioPalmeirasxCruzeiro"],
     "CBO - ROLETA - MINI GAMES 08/07":                ["roleta-dep-50"],
     "Ale Sports":                                     ["AD1_Ale1005"],
     "CBO - ASSINATURA - RMKT":                        [],
@@ -70,6 +71,7 @@ META_CAMPAIGN_UTM_MAP: dict[str, list[str]] = {
     "Ale Galo ODD 13":                                [],
     "Ale":                                            ["AD1_Ale1005"],
     "Brabo+Multi Odds":                               ["brabovasco"],
+    "Brabo+Multi Odds — Cópia":                       ["brabopxc"],
     "Lead AFF — Cópia":                               [],
 }
 
