@@ -34,7 +34,6 @@ META_AD_ACCOUNT_IDS = [
     "act_3506962756106082",   # Multibet
     "act_1531679918112645",   # Multibet Verified
     "act_1282215803969842",   # Multibet Verified 3
-    "act_4397365763819913",   # Multibet Verified 4
     "act_26153688877615850",  # Multibet Verified 5
 ]
 META_API_VERSION = "v19.0"
