@@ -63,7 +63,7 @@ META_CAMPAIGN_UTM_MAP: dict[str, list[str]] = {
     "CBO - ASSINATURA - RMKT":                        [],
     "Josiasbr":                                       ["AD1_JosiasGaloodd13", "AD2_JosiasAlemanha",
                                                        "AD1_JosiasAlemanha1"],
-    "Josias Sport":                                   ["AD1_JosiasPalmeirasxCruzeiro-Sport", "AD1_Josiasgalosport"],
+    "Josias Sport":                                   ["AD1_Josiasgalosport"],
     "RMK Meta Sport":                                 [],
     "Remarketing Google":                             [],
     "Venda Sports ODD10 Cruxcat":                     ["AD1_Estaticocaiocru"],
