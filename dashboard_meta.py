@@ -68,7 +68,7 @@ META_CAMPAIGN_UTM_MAP: dict[str, list[str]] = {
     "Remarketing Google":                             [],
     "Venda Sports ODD10 Cruxcat":                     ["AD1_Estaticocaiocru"],
     "Ale Galo ODD 13":                                [],
-    "Ale":                                            ["AD1_Ale1005", "AD1_Ale2005"],
+    "Ale":                                            ["AD1_Ale2405"],
     "Estático Flamengo":                              ["estaticocaio2005"],
     "Vendas Gameplay Roleta ROAS":                    ["roleta-dep-50"],
     "Vendas Gameplay Roleta ROAS 2":                  ["roleta-dep-50"],
