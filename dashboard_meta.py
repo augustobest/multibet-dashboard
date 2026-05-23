@@ -55,7 +55,7 @@ META_CAMPAIGN_UTM_MAP: dict[str, list[str]] = {
     "Mini games Raspadinha — Cópia":                  ["raspadinha"],
     "Mini Games caixa":                               ["caixas"],
     "Mini Games Videos Lara":                         ["Lara5reais"],
-    "Thiago ODD Domingo":                             ["AD1_ThiagoVascoagama", "AD1_ThiagoPalmeirasvsAthet", "AD1_ThiagoPalmeirasxCruzeiro"],
+    "Thiago ODD Domingo":                             ["thiago2405"],
     "Estático Vasco":                                 ["estaticocaiovasco"],
     "Estático Palmeiras e Cruzeiro":                  ["estaticocaioPalmeirasxCruzeiro"],
     "CBO - ROLETA - MINI GAMES 08/07":                ["roleta-dep-50"],
