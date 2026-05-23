@@ -75,6 +75,9 @@ META_CAMPAIGN_UTM_MAP: dict[str, list[str]] = {
     "Brabo+Multi Odds":                               ["brabovasco"],
     "Brabo+Multi Odds — Cópia":                       ["brabopxc"],
     "Lead AFF — Cópia":                               [],
+    "Estatico Sport Wesley":                          ["estaticoWesley2405"],
+    "Vendas Gameplay React":                          ["roleta-dep-50"],
+    "Estático Galo x Corinthians":                    ["estaticocaio2405"],
 }
 
 # UTMs do Smartico que devem ser mescladas sob uma chave canônica
