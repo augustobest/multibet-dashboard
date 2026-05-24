@@ -1043,6 +1043,7 @@ def main():
 
 def render_utm_editor():
     from supabase_client import get_authed_client
+    from auth import current_client_id
     st.divider()
     with st.expander("🛠️ Editar UTM Mapping", expanded=False):
         st.caption(
@@ -1050,6 +1051,11 @@ def render_utm_editor():
             "Pra remover uma campanha, apaga a linha. Vai refletir no dashboard em até 5 minutos "
             "(cache). Use **Forçar atualização** no sidebar pra ver imediato."
         )
+
+        client_id = current_client_id()
+        if not client_id:
+            st.warning("Cliente não identificado — não dá pra editar.")
+            return
 
         sb = get_authed_client()
         try:
@@ -1101,9 +1107,10 @@ def render_utm_editor():
                 to_delete = current_names - new_names
 
                 for row in new_data:
-                    sb.table("utm_mapping").upsert(row, on_conflict="campaign_name").execute()
+                    row["client_id"] = client_id
+                    sb.table("utm_mapping").upsert(row, on_conflict="client_id,campaign_name").execute()
                 for camp in to_delete:
-                    sb.table("utm_mapping").delete().eq("campaign_name", camp).execute()
+                    sb.table("utm_mapping").delete().eq("client_id", client_id).eq("campaign_name", camp).execute()
 
                 load_utm_mapping.clear()
                 st.success(

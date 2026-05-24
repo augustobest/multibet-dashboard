@@ -1,12 +1,16 @@
-"""Ingestão Smartico + Meta → Supabase Postgres.
+"""Ingestão multi-cliente: Smartico + Meta → Supabase Postgres.
+
+Loop sobre todos os clientes ativos em `clients`. Pra cada um, lê credenciais
+de `client_sources` e popula `smartico_daily` / `meta_daily` marcando com client_id.
 
 Uso:
     python ingest.py                   # últimos 2 dias (default cron)
     python ingest.py --days 90         # backfill 90 dias
     python ingest.py --from 2026-05-01 --to 2026-05-15
+    python ingest.py --client multibet # roda só pra um cliente (slug)
 
-Lê config de variáveis de ambiente:
-    SUPABASE_URL, SUPABASE_SERVICE_KEY, SMARTICO_KEY, META_ACCESS_TOKEN
+Env vars:
+    SUPABASE_URL, SUPABASE_SERVICE_KEY  (obrigatórios)
 """
 
 import argparse
@@ -17,17 +21,6 @@ from datetime import datetime, timedelta
 
 import requests
 from supabase import create_client
-
-SMARTICO_URL = "https://boapi3.smartico.ai"
-AFFILIATE_ID = 464673
-META_ACCOUNTS = [
-    "act_1418521646228655",
-    "act_3506962756106082",
-    "act_1531679918112645",
-    "act_1282215803969842",
-    "act_26153688877615850",
-]
-META_API_VERSION = "v19.0"
 
 UPSERT_CHUNK_SIZE = 500
 
@@ -48,19 +41,24 @@ def num(row: dict, key: str) -> float:
         return 0.0
 
 
-def fetch_smartico_rows(date_from: str, date_to: str) -> list[dict]:
+# ─────────────────────────────────────────────
+# SMARTICO
+# ─────────────────────────────────────────────
+def fetch_smartico_rows(client_id: str, config: dict, date_from: str, date_to: str) -> list[dict]:
+    host = config.get("host", "https://boapi3.smartico.ai")
+    api_key = config["api_key"]
+    affiliate_id = config["affiliate_id"]
+
     dt_to = (datetime.strptime(date_to, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
     url = (
-        f"{SMARTICO_URL}/api/af2_media_report_op"
+        f"{host}/api/af2_media_report_op"
         f"?aggregation_period=DAY&date_from={date_from}&date_to={dt_to}"
-        f"&affiliate_id={AFFILIATE_ID}&group_by=utm_campaign"
+        f"&affiliate_id={affiliate_id}&group_by=utm_campaign"
     )
-    r = requests.get(url, headers={"authorization": env("SMARTICO_KEY")}, timeout=120)
+    r = requests.get(url, headers={"authorization": api_key}, timeout=120)
     r.raise_for_status()
     data = r.json().get("data") or []
 
-    # Smartico devolve uma linha por (dia, utm). Agregamos pra garantir unicidade
-    # do PK (date, utm_campaign) e somar caso venha duplicado.
     grouped: dict[tuple[str, str], dict] = {}
     for row in data:
         date = (row.get("dt") or "")[:10]
@@ -69,6 +67,7 @@ def fetch_smartico_rows(date_from: str, date_to: str) -> list[dict]:
             continue
         key = (date, utm)
         agg = grouped.setdefault(key, {
+            "client_id": client_id,
             "date": date,
             "utm_campaign": utm,
             "registrations": 0,
@@ -99,12 +98,17 @@ def fetch_smartico_rows(date_from: str, date_to: str) -> list[dict]:
     return list(grouped.values())
 
 
-def fetch_meta_rows(date_from: str, date_to: str) -> list[dict]:
-    token = env("META_ACCESS_TOKEN")
-    grouped: dict[tuple, dict] = {}
+# ─────────────────────────────────────────────
+# META
+# ─────────────────────────────────────────────
+def fetch_meta_rows(client_id: str, config: dict, date_from: str, date_to: str) -> list[dict]:
+    token = config["access_token"]
+    accounts = config.get("account_ids", [])
+    api_version = config.get("api_version", "v19.0")
 
-    for acct in META_ACCOUNTS:
-        url = f"https://graph.facebook.com/{META_API_VERSION}/{acct}/insights"
+    grouped: dict[tuple, dict] = {}
+    for acct in accounts:
+        url = f"https://graph.facebook.com/{api_version}/{acct}/insights"
         params = {
             "access_token": token,
             "time_range": f'{{"since":"{date_from}","until":"{date_to}"}}',
@@ -130,21 +134,25 @@ def fetch_meta_rows(date_from: str, date_to: str) -> list[dict]:
                     continue
                 key = (date, acct, campaign_id)
                 grouped.setdefault(key, {
-                    "date": date,
-                    "account_id": acct,
+                    "client_id":   client_id,
+                    "date":        date,
+                    "account_id":  acct,
                     "campaign_id": campaign_id,
                     "campaign_name": row.get("campaign_name", ""),
-                    "spend": float(row.get("spend") or 0),
-                    "impressions": int(num(row, "impressions")),
-                    "clicks": int(num(row, "clicks")),
-                    "reach": int(num(row, "reach")),
-                    "frequency": float(row.get("frequency") or 0) or None,
+                    "spend":         float(row.get("spend") or 0),
+                    "impressions":   int(num(row, "impressions")),
+                    "clicks":        int(num(row, "clicks")),
+                    "reach":         int(num(row, "reach")),
+                    "frequency":     float(row.get("frequency") or 0) or None,
                 })
             next_url = body.get("paging", {}).get("next")
             first = False
     return list(grouped.values())
 
 
+# ─────────────────────────────────────────────
+# UPSERT
+# ─────────────────────────────────────────────
 def upsert(sb, table: str, rows: list[dict], pk: list[str]):
     if not rows:
         return
@@ -153,14 +161,19 @@ def upsert(sb, table: str, rows: list[dict], pk: list[str]):
         sb.table(table).upsert(chunk, on_conflict=",".join(pk)).execute()
 
 
+# ─────────────────────────────────────────────
+# MAIN
+# ─────────────────────────────────────────────
 def main():
-    parser = argparse.ArgumentParser(description="Ingestão Smartico+Meta → Supabase")
+    parser = argparse.ArgumentParser(description="Ingestão multi-cliente Smartico+Meta → Supabase")
     parser.add_argument("--days", type=int, default=2,
                         help="Quantos dias para trás (default 2, pega ontem+hoje)")
     parser.add_argument("--from", dest="date_from",
                         help="Data inicial YYYY-MM-DD (sobrepõe --days)")
     parser.add_argument("--to", dest="date_to",
                         help="Data final YYYY-MM-DD (default hoje)")
+    parser.add_argument("--client", dest="client_slug",
+                        help="Roda só pra um cliente (slug). Default: todos ativos.")
     args = parser.parse_args()
 
     today = datetime.today()
@@ -174,17 +187,47 @@ def main():
 
     sb = create_client(env("SUPABASE_URL"), env("SUPABASE_SERVICE_KEY"))
 
-    print("Buscando Smartico...")
-    sm_rows = fetch_smartico_rows(date_from, date_to)
-    print(f"  {len(sm_rows)} linhas")
-    upsert(sb, "smartico_daily", sm_rows, ["date", "utm_campaign"])
+    # Carrega lista de clientes ativos
+    client_q = sb.table("clients").select("id,name,slug").eq("active", True)
+    if args.client_slug:
+        client_q = client_q.eq("slug", args.client_slug)
+    clients = client_q.execute().data or []
+    if not clients:
+        print("Nenhum cliente ativo encontrado.")
+        return
 
-    print("Buscando Meta...")
-    meta_rows = fetch_meta_rows(date_from, date_to)
-    print(f"  {len(meta_rows)} linhas")
-    upsert(sb, "meta_daily", meta_rows, ["date", "account_id", "campaign_id"])
+    for client in clients:
+        print(f"\n=== Cliente: {client['name']} ({client['slug']}) ===")
 
-    print("Concluído.")
+        # Carrega configs (smartico + meta) deste cliente
+        sources = sb.table("client_sources").select("source_type,config,active").eq("client_id", client["id"]).execute().data or []
+        config_by_type = {s["source_type"]: s["config"] for s in sources if s.get("active", True)}
+
+        # Smartico
+        if "smartico" in config_by_type:
+            print("  Buscando Smartico...")
+            try:
+                rows = fetch_smartico_rows(client["id"], config_by_type["smartico"], date_from, date_to)
+                print(f"    {len(rows)} linhas")
+                upsert(sb, "smartico_daily", rows, ["client_id", "date", "utm_campaign"])
+            except Exception as e:
+                print(f"    ERRO Smartico: {e}", file=sys.stderr)
+        else:
+            print("  Smartico: sem config, pulando")
+
+        # Meta
+        if "meta" in config_by_type:
+            print("  Buscando Meta...")
+            try:
+                rows = fetch_meta_rows(client["id"], config_by_type["meta"], date_from, date_to)
+                print(f"    {len(rows)} linhas")
+                upsert(sb, "meta_daily", rows, ["client_id", "date", "account_id", "campaign_id"])
+            except Exception as e:
+                print(f"    ERRO Meta: {e}", file=sys.stderr)
+        else:
+            print("  Meta: sem config, pulando")
+
+    print("\nConcluído.")
 
 
 if __name__ == "__main__":

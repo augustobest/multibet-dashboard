@@ -50,14 +50,54 @@ def _render_login():
                 st.error(f"Erro ao autenticar: {e}")
 
 
+def _load_user_client() -> dict | None:
+    """Carrega o(s) cliente(s) que o usuário logado pertence.
+    Por enquanto pega o primeiro (sem seletor multi-tenant na UI ainda)."""
+    if "sb_client" in st.session_state:
+        return st.session_state["sb_client"]
+    try:
+        from supabase_client import get_authed_client
+        sb = get_authed_client()
+        res = sb.table("user_clients").select("client_id, role, clients(id, name, slug)").limit(1).execute()
+        rows = res.data or []
+        if not rows:
+            return None
+        row = rows[0]
+        client = row.get("clients") or {}
+        info = {
+            "id":   client.get("id") or row.get("client_id"),
+            "name": client.get("name"),
+            "slug": client.get("slug"),
+            "role": row.get("role"),
+        }
+        st.session_state["sb_client"] = info
+        return info
+    except Exception as e:
+        st.error(f"Erro ao carregar cliente: {e}")
+        return None
+
+
 def require_login() -> dict:
     """Bloqueia a renderização da dashboard até o usuário logar.
     Retorna dict do user logado quando autenticado."""
     user = st.session_state.get("sb_user")
     if user:
+        client = _load_user_client()
+        if not client:
+            st.error("Sua conta não está vinculada a nenhum cliente. Contate o admin.")
+            st.stop()
         return user
     _render_login()
     st.stop()
+
+
+def current_client_id() -> str | None:
+    info = st.session_state.get("sb_client")
+    return info.get("id") if info else None
+
+
+def current_client() -> dict | None:
+    return st.session_state.get("sb_client")
 
 
 def logout_button(location=st.sidebar):
@@ -71,6 +111,6 @@ def logout_button(location=st.sidebar):
                 _client().auth.sign_out()
             except Exception:
                 pass
-            for k in ("sb_user", "sb_session"):
+            for k in ("sb_user", "sb_session", "sb_client"):
                 st.session_state.pop(k, None)
             st.rerun()

@@ -16,6 +16,9 @@ on:
       date_to:
         description: 'Data final YYYY-MM-DD (opcional, default hoje)'
         required: false
+      client:
+        description: 'Slug de cliente específico (vazio = todos ativos)'
+        required: false
 
 jobs:
   ingest:
@@ -36,11 +39,17 @@ jobs:
         env:
           SUPABASE_URL:          ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY:  ${{ secrets.SUPABASE_SERVICE_KEY }}
-          SMARTICO_KEY:          ${{ secrets.SMARTICO_KEY }}
-          META_ACCESS_TOKEN:     ${{ secrets.META_ACCESS_TOKEN }}
         run: |
+          ARGS=""
           if [ -n "${{ github.event.inputs.date_from }}" ]; then
-            python ingest.py --from "${{ github.event.inputs.date_from }}" ${{ github.event.inputs.date_to && format('--to {0}', github.event.inputs.date_to) || '' }}
+            ARGS="--from ${{ github.event.inputs.date_from }}"
+            if [ -n "${{ github.event.inputs.date_to }}" ]; then
+              ARGS="$ARGS --to ${{ github.event.inputs.date_to }}"
+            fi
           else
-            python ingest.py --days ${{ github.event.inputs.days || '2' }}
+            ARGS="--days ${{ github.event.inputs.days || '2' }}"
           fi
+          if [ -n "${{ github.event.inputs.client }}" ]; then
+            ARGS="$ARGS --client ${{ github.event.inputs.client }}"
+          fi
+          python ingest.py $ARGS
