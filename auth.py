@@ -1,15 +1,8 @@
 # auth.py — gate de autenticação Supabase para a Multibet Dashboard
 
 import streamlit as st
-from supabase import create_client, Client
 
-SUPABASE_URL = st.secrets.get("SUPABASE_URL", "https://jjygbxojkbxjctflblji.supabase.co")
-SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", "sb_publishable_Vhi8qaq-iGLZj3ngtFFDOg_YdI9C5dP")
-
-
-@st.cache_resource
-def _client() -> Client:
-    return create_client(SUPABASE_URL, SUPABASE_KEY)
+from supabase_client import get_client as _client
 
 
 def _render_login():

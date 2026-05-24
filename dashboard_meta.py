@@ -43,45 +43,19 @@ META_API_VERSION = "v19.0"
 REFRESH_MIN  = 30
 DEFAULT_DAYS = 15
 
-# Campanha Meta → UTMs no Smartico
-META_CAMPAIGN_UTM_MAP: dict[str, list[str]] = {
-    "Deposite e ganhe ROAS":                          ["modal-dep-100"],
-    "Deposite e ganhe Motions":                       ["modal-dep-100-motion"],
-    "Mini Games Motion":                              ["caixas", "raspadinha"],
-    "Mini Games Roleta estáticos":                    ["roleta-dep-50"],
-    "Mini Games Roleta estáticos — Cópia":            ["roleta-dep-50"],
-    "Mini Games Roleta estáticos — Cópia — Cópia":    ["roleta-dep-50"],
-    "Mini Games":                                     ["roleta-dep-50"],
-    "Mini Game":                                      ["roleta-dep-50"],
-    "Mini games 2":                                   ["roleta-dep-50"],
-    "Mini games Raspadinha":                          ["raspadinha"],
-    "Mini games Raspadinha — Cópia":                  ["raspadinha"],
-    "Mini Games caixa":                               ["caixas"],
-    "Mini Games Videos Lara":                         ["Lara5reais"],
-    "Thiago ODD Domingo":                             ["thiago2405"],
-    "Estático Vasco":                                 ["estaticocaiovasco"],
-    "Estático Palmeiras e Cruzeiro":                  ["estaticocaioPalmeirasxCruzeiro"],
-    "CBO - ROLETA - MINI GAMES 08/07":                ["roleta-dep-50"],
-    "Ale Sports":                                     ["AD1_Ale1005"],
-    "CBO - ASSINATURA - RMKT":                        [],
-    "Josiasbr":                                       ["AD1_JosiasGaloodd13", "AD2_JosiasAlemanha",
-                                                       "AD1_JosiasAlemanha1"],
-    "Josias Sport":                                   ["AD1_Josiasgalosport"],
-    "RMK Meta Sport":                                 [],
-    "Remarketing Google":                             [],
-    "Venda Sports ODD10 Cruxcat":                     ["AD1_Estaticocaiocru"],
-    "Ale Galo ODD 13":                                [],
-    "Ale":                                            ["AD1_Ale2405"],
-    "Estático Flamengo":                              ["estaticocaio2005"],
-    "Vendas Gameplay Roleta ROAS":                    ["roleta-dep-50"],
-    "Vendas Gameplay Roleta ROAS 2":                  ["roleta-dep-50"],
-    "Brabo+Multi Odds":                               ["brabovasco"],
-    "Brabo+Multi Odds — Cópia":                       ["brabopxc"],
-    "Lead AFF — Cópia":                               [],
-    "Estatico Sport Wesley":                          ["estaticoWesley2405"],
-    "Vendas Gameplay React":                          ["roleta-dep-50"],
-    "Estático Galo x Corinthians":                    ["estaticocaio2405"],
-}
+# Campanha Meta → UTMs no Smartico (carregado do banco via load_utm_mapping)
+# Cache TTL 5min: edita em utm_mapping no Supabase → em 5min reflete na dash
+@st.cache_data(ttl=300, show_spinner=False)
+def load_utm_mapping() -> dict[str, list[str]]:
+    try:
+        from supabase_client import get_authed_client
+        res = get_authed_client().table("utm_mapping").select("campaign_name,utm_campaigns").execute()
+        return {row["campaign_name"]: (row.get("utm_campaigns") or []) for row in (res.data or [])}
+    except Exception as e:
+        st.warning(f"Não foi possível carregar utm_mapping do banco: {e}. Usando mapa vazio.")
+        return {}
+
+
 
 # UTMs do Smartico que devem ser mescladas sob uma chave canônica
 SM_AGGREGATE: dict[str, list[str]] = {
@@ -217,7 +191,8 @@ def _smartico_get(url: str) -> list:
                 return []
 
 
-def fetch_smartico(date_from_str: str, date_to_str: str) -> dict:
+def _smartico_api_range(date_from_str: str, date_to_str: str) -> list[dict]:
+    """Chamada direta à API Smartico (cobre só o intervalo passado, sem dividir DB/API)."""
     dt_to = (datetime.strptime(date_to_str, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
     url = (
         f"{SMARTICO_URL}/api/af2_media_report_op"
@@ -227,63 +202,176 @@ def fetch_smartico(date_from_str: str, date_to_str: str) -> dict:
         f"&affiliate_id={AFFILIATE_ID}"
         f"&group_by=utm_campaign"
     )
-    data = _smartico_get(url)
-    if data is None:
-        return {}
+    return _smartico_get(url) or []
+
+
+def _apply_sm_aggregate(utm: str) -> str:
+    for canon, variants in SM_AGGREGATE.items():
+        if utm in variants:
+            return canon
+    return utm
+
+
+# Mapeamento nome-coluna do banco → nome-campo do API (manter compat com resto do código)
+_DB_TO_API_FIELD = {
+    "registrations":     "registration_count",
+    "ftd_count":         "ftd_count",
+    "ftd_total":         "ftd_total",
+    "deposit_count":     "deposit_count",
+    "deposit_total":     "deposit_total",
+    "net_deposits":      "net_deposits",
+    "net_pl":            "net_pl",
+    "net_pl_casino":     "net_pl_casino",
+    "net_pl_sport":      "net_pl_sport",
+    "withdrawal_total":  "withdrawal_total",
+    "bonus_amount":      "bonus_amount",
+    "commissions_total": "commissions_total",
+}
+
+# Campos do API que não estão no banco — caem como 0 quando lendo do DB
+_SM_METRIC_KEYS = list(_DB_TO_API_FIELD.values()) + ["withdrawal_count", "volume", "visit_count", "deposit_count"]
+
+
+@st.cache_data(ttl=REFRESH_MIN * 60, show_spinner=False)
+def _smartico_db_agg(date_from_str: str, date_to_str: str) -> dict:
+    """Lê smartico_daily do Supabase e agrega no formato de fetch_smartico (dict[utm] = dict[field])."""
+    try:
+        from supabase_client import get_authed_client
+        res = (
+            get_authed_client()
+            .table("smartico_daily")
+            .select("*")
+            .gte("date", date_from_str)
+            .lte("date", date_to_str)
+            .execute()
+        )
+        rows = res.data or []
+    except Exception as e:
+        st.warning(f"Falha lendo smartico_daily do banco: {e}. Caindo para API.")
+        return None
 
     result: dict = defaultdict(lambda: defaultdict(float))
-    for row in data:
-        utm = row.get("utm_campaign") or "(sem_utm)"
-        for canon, variants in SM_AGGREGATE.items():
-            if utm in variants:
-                utm = canon
-                break
-        for key in ["registration_count", "ftd_count", "ftd_total", "deposit_count",
-                    "deposit_total", "net_deposits", "net_pl", "net_pl_casino",
-                    "net_pl_sport", "withdrawal_count", "withdrawal_total",
-                    "bonus_amount", "volume", "commissions_total", "visit_count"]:
-            result[utm][key] += _sm_num(row, key)
+    for row in rows:
+        utm = _apply_sm_aggregate(row.get("utm_campaign") or "(sem_utm)")
+        for db_col, api_field in _DB_TO_API_FIELD.items():
+            result[utm][api_field] += float(row.get(db_col) or 0)
     return dict(result)
 
 
-@st.cache_data(ttl=REFRESH_MIN * 60)
-def fetch_smartico_daily(date_from_str: str, date_to_str: str) -> pd.DataFrame:
-    dt_to = (datetime.strptime(date_to_str, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
-    url = (
-        f"{SMARTICO_URL}/api/af2_media_report_op"
-        f"?aggregation_period=DAY"
-        f"&date_from={date_from_str}"
-        f"&date_to={dt_to}"
-        f"&affiliate_id={AFFILIATE_ID}"
-        f"&group_by=utm_campaign"
-    )
-    data = _smartico_get(url)
-    if not data:
-        return pd.DataFrame()
+def fetch_smartico(date_from_str: str, date_to_str: str) -> dict:
+    """Modo híbrido: dias passados do banco + hoje da API ao vivo."""
+    today = datetime.today().strftime("%Y-%m-%d")
+    result: dict = defaultdict(lambda: defaultdict(float))
 
+    # Parte histórica (até ontem) — vem do banco
+    if date_from_str < today:
+        past_to = min(date_to_str, (datetime.strptime(today, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d"))
+        db = _smartico_db_agg(date_from_str, past_to)
+        if db is None:
+            # fallback: tudo via API
+            for row in _smartico_api_range(date_from_str, date_to_str):
+                utm = _apply_sm_aggregate(row.get("utm_campaign") or "(sem_utm)")
+                for key in _SM_METRIC_KEYS:
+                    result[utm][key] += _sm_num(row, key)
+            return dict(result)
+        for utm, fields in db.items():
+            for k, v in fields.items():
+                result[utm][k] += v
+
+    # Hoje — sempre via API (mais fresco que o job que roda 1x/dia)
+    if date_to_str >= today:
+        for row in _smartico_api_range(today, date_to_str):
+            utm = _apply_sm_aggregate(row.get("utm_campaign") or "(sem_utm)")
+            for key in _SM_METRIC_KEYS:
+                result[utm][key] += _sm_num(row, key)
+
+    return dict(result)
+
+
+def _smartico_api_daily_rows(date_from_str: str, date_to_str: str) -> list[dict]:
+    """Versão raw da API daily — usada como fallback ou pra 'hoje'."""
+    data = _smartico_api_range(date_from_str, date_to_str)
     rows = []
     for row in data:
-        utm = row.get("utm_campaign") or "(sem_utm)"
-        for canon, variants in SM_AGGREGATE.items():
-            if utm in variants:
-                utm = canon
-                break
+        utm = _apply_sm_aggregate(row.get("utm_campaign") or "(sem_utm)")
         rows.append({
-            "data":        row.get("dt", "")[:10],
-            "utm":         utm,
-            "ftds":        _sm_num(row, "ftd_count"),
-            "regs":        _sm_num(row, "registration_count"),
-            "net_pl":      _sm_num(row, "net_pl"),
-            "net_deposits":_sm_num(row, "net_deposits"),
-            "deposits":    _sm_num(row, "deposit_total"),
-            "comm_total":  _sm_num(row, "commissions_total"),
-            "bonus":       _sm_num(row, "bonus_amount"),
-            "ftd_total":   _sm_num(row, "ftd_total"),
+            "data":         row.get("dt", "")[:10],
+            "utm":          utm,
+            "ftds":         _sm_num(row, "ftd_count"),
+            "regs":         _sm_num(row, "registration_count"),
+            "net_pl":       _sm_num(row, "net_pl"),
+            "net_deposits": _sm_num(row, "net_deposits"),
+            "deposits":     _sm_num(row, "deposit_total"),
+            "comm_total":   _sm_num(row, "commissions_total"),
+            "bonus":        _sm_num(row, "bonus_amount"),
+            "ftd_total":    _sm_num(row, "ftd_total"),
         })
+    return rows
 
+
+@st.cache_data(ttl=REFRESH_MIN * 60, show_spinner=False)
+def _smartico_db_daily(date_from_str: str, date_to_str: str) -> pd.DataFrame:
+    try:
+        from supabase_client import get_authed_client
+        res = (
+            get_authed_client()
+            .table("smartico_daily")
+            .select("date,utm_campaign,ftd_count,registrations,net_pl,net_deposits,deposit_total,commissions_total,bonus_amount,ftd_total")
+            .gte("date", date_from_str)
+            .lte("date", date_to_str)
+            .execute()
+        )
+        rows = res.data or []
+    except Exception as e:
+        st.warning(f"Falha lendo smartico_daily (daily) do banco: {e}. Caindo para API.")
+        return None
     if not rows:
         return pd.DataFrame()
-    df = pd.DataFrame(rows)
+    out = []
+    for r in rows:
+        out.append({
+            "data":         r["date"],
+            "utm":          _apply_sm_aggregate(r.get("utm_campaign") or "(sem_utm)"),
+            "ftds":         float(r.get("ftd_count") or 0),
+            "regs":         float(r.get("registrations") or 0),
+            "net_pl":       float(r.get("net_pl") or 0),
+            "net_deposits": float(r.get("net_deposits") or 0),
+            "deposits":     float(r.get("deposit_total") or 0),
+            "comm_total":   float(r.get("commissions_total") or 0),
+            "bonus":        float(r.get("bonus_amount") or 0),
+            "ftd_total":    float(r.get("ftd_total") or 0),
+        })
+    return pd.DataFrame(out)
+
+
+def fetch_smartico_daily(date_from_str: str, date_to_str: str) -> pd.DataFrame:
+    """Híbrido: histórico do banco + hoje via API."""
+    today = datetime.today().strftime("%Y-%m-%d")
+    frames = []
+
+    if date_from_str < today:
+        past_to = min(date_to_str, (datetime.strptime(today, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d"))
+        db = _smartico_db_daily(date_from_str, past_to)
+        if db is None:
+            # fallback: tudo via API
+            api_rows = _smartico_api_daily_rows(date_from_str, date_to_str)
+            if not api_rows:
+                return pd.DataFrame()
+            df = pd.DataFrame(api_rows)
+            df["data"] = pd.to_datetime(df["data"])
+            return df.groupby(["data", "utm"], as_index=False).sum(numeric_only=True)
+        if not db.empty:
+            frames.append(db)
+
+    if date_to_str >= today:
+        api_rows = _smartico_api_daily_rows(today, date_to_str)
+        if api_rows:
+            frames.append(pd.DataFrame(api_rows))
+
+    if not frames:
+        return pd.DataFrame()
+
+    df = pd.concat(frames, ignore_index=True)
     df["data"] = pd.to_datetime(df["data"])
     return df.groupby(["data", "utm"], as_index=False).sum(numeric_only=True)
 
@@ -319,9 +407,8 @@ def _meta_get(path: str, params: dict) -> list[dict]:
     return results
 
 
-@st.cache_data(ttl=REFRESH_MIN * 60)
-def fetch_meta_insights(date_from_str: str, date_to_str: str) -> list[dict]:
-    all_rows = []
+def _meta_api_insights(date_from_str: str, date_to_str: str) -> list[dict]:
+    out = []
     for account_id in META_AD_ACCOUNT_IDS:
         rows = _meta_get(
             f"{account_id}/insights",
@@ -331,8 +418,57 @@ def fetch_meta_insights(date_from_str: str, date_to_str: str) -> list[dict]:
                 "level": "adset",
             },
         )
-        all_rows.extend(rows)
-    return all_rows
+        out.extend(rows)
+    return out
+
+
+@st.cache_data(ttl=REFRESH_MIN * 60, show_spinner=False)
+def _meta_db_insights(date_from_str: str, date_to_str: str):
+    try:
+        from supabase_client import get_authed_client
+        res = (
+            get_authed_client()
+            .table("meta_daily")
+            .select("date,account_id,campaign_id,campaign_name,spend,impressions,clicks,reach,frequency")
+            .gte("date", date_from_str)
+            .lte("date", date_to_str)
+            .execute()
+        )
+        rows = res.data or []
+    except Exception as e:
+        st.warning(f"Falha lendo meta_daily do banco: {e}. Caindo para API.")
+        return None
+    out = []
+    for r in rows:
+        out.append({
+            "campaign_name": r.get("campaign_name", ""),
+            "campaign_id":   r.get("campaign_id", ""),
+            "date_start":    r.get("date", ""),
+            "spend":         str(r.get("spend") or 0),
+            "impressions":   str(r.get("impressions") or 0),
+            "clicks":        str(r.get("clicks") or 0),
+            "reach":         str(r.get("reach") or 0),
+            "frequency":     str(r["frequency"]) if r.get("frequency") is not None else None,
+        })
+    return out
+
+
+def fetch_meta_insights(date_from_str: str, date_to_str: str) -> list[dict]:
+    """Híbrido: histórico campaign-level do banco + hoje adset-level via API."""
+    today = datetime.today().strftime("%Y-%m-%d")
+    out = []
+
+    if date_from_str < today:
+        past_to = min(date_to_str, (datetime.strptime(today, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d"))
+        db = _meta_db_insights(date_from_str, past_to)
+        if db is None:
+            return _meta_api_insights(date_from_str, date_to_str)
+        out.extend(db)
+
+    if date_to_str >= today:
+        out.extend(_meta_api_insights(today, date_to_str))
+
+    return out
 
 
 @st.cache_data(ttl=REFRESH_MIN * 60)
@@ -360,9 +496,8 @@ def fetch_meta_campaigns() -> dict[str, dict]:
     return result
 
 
-@st.cache_data(ttl=REFRESH_MIN * 60)
-def fetch_meta_daily(date_from_str: str, date_to_str: str) -> pd.DataFrame:
-    all_rows = []
+def _meta_api_daily_rows(date_from_str: str, date_to_str: str) -> list[dict]:
+    out = []
     for account_id in META_AD_ACCOUNT_IDS:
         rows = _meta_get(
             f"{account_id}/insights",
@@ -373,13 +508,62 @@ def fetch_meta_daily(date_from_str: str, date_to_str: str) -> pd.DataFrame:
                 "time_increment": "1",
             },
         )
-        all_rows.extend(rows)
+        out.extend(rows)
+    return out
+
+
+@st.cache_data(ttl=REFRESH_MIN * 60, show_spinner=False)
+def _meta_db_daily_rows(date_from_str: str, date_to_str: str):
+    try:
+        from supabase_client import get_authed_client
+        res = (
+            get_authed_client()
+            .table("meta_daily")
+            .select("date,campaign_name,spend,clicks")
+            .gte("date", date_from_str)
+            .lte("date", date_to_str)
+            .execute()
+        )
+        rows = res.data or []
+    except Exception as e:
+        st.warning(f"Falha lendo meta_daily (daily) do banco: {e}. Caindo para API.")
+        return None
+    return [
+        {"campaign_name": r.get("campaign_name", ""),
+         "date_start":    r.get("date", ""),
+         "spend":         str(r.get("spend") or 0),
+         "clicks":        str(r.get("clicks") or 0)}
+        for r in rows
+    ]
+
+
+def fetch_meta_daily(date_from_str: str, date_to_str: str) -> pd.DataFrame:
+    today = datetime.today().strftime("%Y-%m-%d")
+    all_rows = []
+
+    if date_from_str < today:
+        past_to = min(date_to_str, (datetime.strptime(today, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d"))
+        db = _meta_db_daily_rows(date_from_str, past_to)
+        if db is None:
+            all_rows.extend(_meta_api_daily_rows(date_from_str, date_to_str))
+            today_done = True
+        else:
+            all_rows.extend(db)
+            today_done = False
+    else:
+        today_done = False
+
+    if not today_done and date_to_str >= today:
+        all_rows.extend(_meta_api_daily_rows(today, date_to_str))
+
     if not all_rows:
         return pd.DataFrame()
+
+    utm_map = load_utm_mapping()
     rows_clean = []
     for row in all_rows:
         camp = row.get("campaign_name", "")
-        utm_list = META_CAMPAIGN_UTM_MAP.get(camp, [camp])
+        utm_list = utm_map.get(camp, [camp])
         utm = utm_list[0] if utm_list else camp
         rows_clean.append({
             "data":    pd.to_datetime(row.get("date_start", "")),
@@ -420,8 +604,9 @@ def reconcile(sm: dict, meta: list[dict]) -> tuple[pd.DataFrame, pd.DataFrame]:
         "frequency_sum": 0.0, "frequency_count": 0,
         "campaigns": set(),
     })
+    utm_map = load_utm_mapping()
     for camp, c in camp_agg.items():
-        utms = META_CAMPAIGN_UTM_MAP.get(camp, [camp])
+        utms = utm_map.get(camp, [camp])
         if not utms:
             utms = ["(sem_utm)"]
         for u in utms:
@@ -856,5 +1041,79 @@ def main():
                 st.markdown("Nenhuma UTM sem match com FTDs no período.")
 
 
+def render_utm_editor():
+    from supabase_client import get_authed_client
+    st.divider()
+    with st.expander("🛠️ Editar UTM Mapping", expanded=False):
+        st.caption(
+            "Edita inline e clica em **Salvar**. Múltiplas UTMs: separar por vírgula. "
+            "Pra remover uma campanha, apaga a linha. Vai refletir no dashboard em até 5 minutos "
+            "(cache). Use **Forçar atualização** no sidebar pra ver imediato."
+        )
+
+        sb = get_authed_client()
+        try:
+            res = sb.table("utm_mapping").select("campaign_name,utm_campaigns,notes").order("campaign_name").execute()
+            rows = res.data or []
+        except Exception as e:
+            st.error(f"Erro ao carregar utm_mapping: {e}")
+            return
+
+        current_df = pd.DataFrame([
+            {
+                "campaign_name": r["campaign_name"],
+                "utm_campaigns": ", ".join(r.get("utm_campaigns") or []),
+                "notes":         r.get("notes") or "",
+            }
+            for r in rows
+        ]) if rows else pd.DataFrame(columns=["campaign_name", "utm_campaigns", "notes"])
+
+        edited = st.data_editor(
+            current_df,
+            num_rows="dynamic",
+            use_container_width=True,
+            key="utm_editor",
+            column_config={
+                "campaign_name": st.column_config.TextColumn("Campanha Meta", required=True),
+                "utm_campaigns": st.column_config.TextColumn("UTMs Smartico (separadas por vírgula)"),
+                "notes":         st.column_config.TextColumn("Notas"),
+            },
+        )
+
+        if st.button("💾 Salvar alterações", type="primary"):
+            try:
+                new_data = []
+                for _, r in edited.iterrows():
+                    camp = (r.get("campaign_name") or "").strip()
+                    if not camp:
+                        continue
+                    raw = r.get("utm_campaigns") or ""
+                    utms = [u.strip() for u in raw.split(",") if u.strip()]
+                    notes = (r.get("notes") or "").strip()
+                    new_data.append({
+                        "campaign_name": camp,
+                        "utm_campaigns": utms,
+                        "notes":         notes or None,
+                    })
+
+                current_names = set(current_df["campaign_name"]) if not current_df.empty else set()
+                new_names = {r["campaign_name"] for r in new_data}
+                to_delete = current_names - new_names
+
+                for row in new_data:
+                    sb.table("utm_mapping").upsert(row, on_conflict="campaign_name").execute()
+                for camp in to_delete:
+                    sb.table("utm_mapping").delete().eq("campaign_name", camp).execute()
+
+                load_utm_mapping.clear()
+                st.success(
+                    f"✅ {len(new_data)} linhas salvas, {len(to_delete)} removidas. "
+                    "Recarregue (botão **Forçar atualização** no sidebar) pra ver no dashboard."
+                )
+            except Exception as e:
+                st.error(f"Erro ao salvar: {e}")
+
+
 if __name__ == "__main__":
     main()
+    render_utm_editor()
