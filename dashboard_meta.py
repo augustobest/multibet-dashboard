@@ -21,7 +21,7 @@ st.set_page_config(
     layout="wide",
 )
 
-from auth import require_login, logout_button
+from auth import require_login, logout_button, current_client_id
 user = require_login()
 
 # ─────────────────────────────────────────────
@@ -1043,7 +1043,6 @@ def main():
 
 def render_utm_editor():
     from supabase_client import get_authed_client
-    from auth import current_client_id
     st.divider()
     with st.expander("🛠️ Editar UTM Mapping", expanded=False):
         st.caption(
