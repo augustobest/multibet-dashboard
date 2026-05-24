@@ -21,6 +21,9 @@ st.set_page_config(
     layout="wide",
 )
 
+from auth import require_login, logout_button
+user = require_login()
+
 # ─────────────────────────────────────────────
 # CONFIG
 # ─────────────────────────────────────────────
@@ -688,6 +691,8 @@ def main():
         if st.button("🔄 Forçar atualização"):
             st.cache_data.clear()
             st.rerun()
+        st.divider()
+    logout_button()
 
     date_from_str = date_from.strftime("%Y-%m-%d")
     date_to_str   = date_to.strftime("%Y-%m-%d")
