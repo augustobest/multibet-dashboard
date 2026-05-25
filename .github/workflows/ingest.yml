@@ -2,8 +2,10 @@ name: Ingest Smartico + Meta → Supabase
 
 on:
   schedule:
-    # Roda às 11:00 UTC (08:00 horário de Brasília) todo dia
+    # 11:00 UTC = 08:00 BR — captura overnight + começa o dia atualizado
     - cron: '0 11 * * *'
+    # 02:59 UTC = 23:59 BR — captura o dia BR praticamente fechado
+    - cron: '59 2 * * *'
   workflow_dispatch:
     inputs:
       days:
