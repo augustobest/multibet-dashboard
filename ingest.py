@@ -21,6 +21,9 @@ from datetime import datetime, timedelta
 
 import requests
 from supabase import create_client
+from zoneinfo import ZoneInfo
+
+BR_TZ = ZoneInfo("America/Sao_Paulo")
 
 UPSERT_CHUNK_SIZE = 500
 
@@ -176,7 +179,7 @@ def main():
                         help="Roda só pra um cliente (slug). Default: todos ativos.")
     args = parser.parse_args()
 
-    today = datetime.today()
+    today = datetime.now(BR_TZ).date()
     date_to = args.date_to or today.strftime("%Y-%m-%d")
     if args.date_from:
         date_from = args.date_from

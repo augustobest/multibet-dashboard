@@ -8,6 +8,7 @@ import plotly.graph_objects as go
 import requests
 from datetime import datetime, timedelta
 from collections import defaultdict
+from tz_utils import today_br, now_br
 
 try:
     from streamlit_autorefresh import st_autorefresh
@@ -260,7 +261,7 @@ def _smartico_db_agg(date_from_str: str, date_to_str: str) -> dict:
 
 def fetch_smartico(date_from_str: str, date_to_str: str) -> dict:
     """Modo híbrido: dias passados do banco + hoje da API ao vivo."""
-    today = datetime.today().strftime("%Y-%m-%d")
+    today = today_br().strftime("%Y-%m-%d")
     result: dict = defaultdict(lambda: defaultdict(float))
 
     # Parte histórica (até ontem) — vem do banco
@@ -346,7 +347,7 @@ def _smartico_db_daily(date_from_str: str, date_to_str: str) -> pd.DataFrame:
 
 def fetch_smartico_daily(date_from_str: str, date_to_str: str) -> pd.DataFrame:
     """Híbrido: histórico do banco + hoje via API."""
-    today = datetime.today().strftime("%Y-%m-%d")
+    today = today_br().strftime("%Y-%m-%d")
     frames = []
 
     if date_from_str < today:
@@ -378,8 +379,8 @@ def fetch_smartico_daily(date_from_str: str, date_to_str: str) -> pd.DataFrame:
 
 @st.cache_data(ttl=REFRESH_MIN * 60)
 def fetch_utm_activity_monitor(lookback_days: int = 90) -> pd.DataFrame:
-    dt_from = (datetime.today() - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
-    dt_to   = datetime.today().strftime("%Y-%m-%d")
+    dt_from = (today_br() - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
+    dt_to   = today_br().strftime("%Y-%m-%d")
     return fetch_smartico_daily(dt_from, dt_to)
 
 
@@ -455,7 +456,7 @@ def _meta_db_insights(date_from_str: str, date_to_str: str):
 
 def fetch_meta_insights(date_from_str: str, date_to_str: str) -> list[dict]:
     """Híbrido: histórico campaign-level do banco + hoje adset-level via API."""
-    today = datetime.today().strftime("%Y-%m-%d")
+    today = today_br().strftime("%Y-%m-%d")
     out = []
 
     if date_from_str < today:
@@ -538,7 +539,7 @@ def _meta_db_daily_rows(date_from_str: str, date_to_str: str):
 
 
 def fetch_meta_daily(date_from_str: str, date_to_str: str) -> pd.DataFrame:
-    today = datetime.today().strftime("%Y-%m-%d")
+    today = today_br().strftime("%Y-%m-%d")
     all_rows = []
 
     if date_from_str < today:
@@ -752,7 +753,7 @@ def build_unified_utm_table(df: pd.DataFrame, budgets: dict) -> pd.DataFrame:
 
 
 def build_utm_monitor(df_activity: pd.DataFrame, active_utms: set, lookback_days: int) -> pd.DataFrame:
-    today = datetime.today().date()
+    today = today_br()
     all_utms = active_utms | (set(df_activity["utm"].unique()) if not df_activity.empty else set())
     all_utms.discard("(sem_utm)")
     rows = []
@@ -862,7 +863,7 @@ def main():
     # ── SIDEBAR ──────────────────────────────────
     with st.sidebar:
         st.markdown("<h2 style='color:#f7f716'>⚙️ Filtros</h2>", unsafe_allow_html=True)
-        today = datetime.today().date()
+        today = today_br()
         default_from = today
 
         date_range = st.date_input("Período", value=(default_from, today), max_value=today)
