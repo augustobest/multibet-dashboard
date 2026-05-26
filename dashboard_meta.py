@@ -10,6 +10,12 @@ from datetime import datetime, timedelta
 from collections import defaultdict
 from tz_utils import today_br, now_br
 
+# Quantos dias recentes (hoje + N-1) puxam direto da API ao vivo.
+# 2 = hoje + ontem. Dias anteriores vêm do banco (mais rápido + cache).
+# Aumentar este número torna a dash mais resiliente a falhas de cron, ao
+# custo de mais chamadas de API por refresh.
+FRESH_DAYS = 2
+
 try:
     from streamlit_autorefresh import st_autorefresh
     HAS_AUTOREFRESH = True
@@ -260,16 +266,15 @@ def _smartico_db_agg(date_from_str: str, date_to_str: str) -> dict:
 
 
 def fetch_smartico(date_from_str: str, date_to_str: str) -> dict:
-    """Modo híbrido: dias passados do banco + hoje da API ao vivo."""
-    today = today_br().strftime("%Y-%m-%d")
+    """Modo híbrido: histórico do banco + janela recente (hoje + N-1 dias) via API ao vivo."""
+    fresh_cutoff = (today_br() - timedelta(days=FRESH_DAYS - 1)).strftime("%Y-%m-%d")
     result: dict = defaultdict(lambda: defaultdict(float))
 
-    # Parte histórica (até ontem) — vem do banco
-    if date_from_str < today:
-        past_to = min(date_to_str, (datetime.strptime(today, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d"))
-        db = _smartico_db_agg(date_from_str, past_to)
+    # Histórico (anterior à janela fresh) — vem do banco
+    if date_from_str < fresh_cutoff:
+        db_to = min(date_to_str, (datetime.strptime(fresh_cutoff, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d"))
+        db = _smartico_db_agg(date_from_str, db_to)
         if db is None:
-            # fallback: tudo via API
             for row in _smartico_api_range(date_from_str, date_to_str):
                 utm = _apply_sm_aggregate(row.get("utm_campaign") or "(sem_utm)")
                 for key in _SM_METRIC_KEYS:
@@ -279,9 +284,10 @@ def fetch_smartico(date_from_str: str, date_to_str: str) -> dict:
             for k, v in fields.items():
                 result[utm][k] += v
 
-    # Hoje — sempre via API (mais fresco que o job que roda 1x/dia)
-    if date_to_str >= today:
-        for row in _smartico_api_range(today, date_to_str):
+    # Janela fresh (hoje + N-1) — sempre via API (não depende de cron)
+    if date_to_str >= fresh_cutoff:
+        api_from = max(date_from_str, fresh_cutoff)
+        for row in _smartico_api_range(api_from, date_to_str):
             utm = _apply_sm_aggregate(row.get("utm_campaign") or "(sem_utm)")
             for key in _SM_METRIC_KEYS:
                 result[utm][key] += _sm_num(row, key)
@@ -346,15 +352,14 @@ def _smartico_db_daily(date_from_str: str, date_to_str: str) -> pd.DataFrame:
 
 
 def fetch_smartico_daily(date_from_str: str, date_to_str: str) -> pd.DataFrame:
-    """Híbrido: histórico do banco + hoje via API."""
-    today = today_br().strftime("%Y-%m-%d")
+    """Híbrido: histórico do banco + janela recente (hoje + N-1 dias) via API."""
+    fresh_cutoff = (today_br() - timedelta(days=FRESH_DAYS - 1)).strftime("%Y-%m-%d")
     frames = []
 
-    if date_from_str < today:
-        past_to = min(date_to_str, (datetime.strptime(today, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d"))
-        db = _smartico_db_daily(date_from_str, past_to)
+    if date_from_str < fresh_cutoff:
+        db_to = min(date_to_str, (datetime.strptime(fresh_cutoff, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d"))
+        db = _smartico_db_daily(date_from_str, db_to)
         if db is None:
-            # fallback: tudo via API
             api_rows = _smartico_api_daily_rows(date_from_str, date_to_str)
             if not api_rows:
                 return pd.DataFrame()
@@ -364,8 +369,9 @@ def fetch_smartico_daily(date_from_str: str, date_to_str: str) -> pd.DataFrame:
         if not db.empty:
             frames.append(db)
 
-    if date_to_str >= today:
-        api_rows = _smartico_api_daily_rows(today, date_to_str)
+    if date_to_str >= fresh_cutoff:
+        api_from = max(date_from_str, fresh_cutoff)
+        api_rows = _smartico_api_daily_rows(api_from, date_to_str)
         if api_rows:
             frames.append(pd.DataFrame(api_rows))
 
@@ -455,19 +461,20 @@ def _meta_db_insights(date_from_str: str, date_to_str: str):
 
 
 def fetch_meta_insights(date_from_str: str, date_to_str: str) -> list[dict]:
-    """Híbrido: histórico campaign-level do banco + hoje adset-level via API."""
-    today = today_br().strftime("%Y-%m-%d")
+    """Híbrido: histórico campaign-level do banco + janela recente adset-level via API."""
+    fresh_cutoff = (today_br() - timedelta(days=FRESH_DAYS - 1)).strftime("%Y-%m-%d")
     out = []
 
-    if date_from_str < today:
-        past_to = min(date_to_str, (datetime.strptime(today, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d"))
-        db = _meta_db_insights(date_from_str, past_to)
+    if date_from_str < fresh_cutoff:
+        db_to = min(date_to_str, (datetime.strptime(fresh_cutoff, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d"))
+        db = _meta_db_insights(date_from_str, db_to)
         if db is None:
             return _meta_api_insights(date_from_str, date_to_str)
         out.extend(db)
 
-    if date_to_str >= today:
-        out.extend(_meta_api_insights(today, date_to_str))
+    if date_to_str >= fresh_cutoff:
+        api_from = max(date_from_str, fresh_cutoff)
+        out.extend(_meta_api_insights(api_from, date_to_str))
 
     return out
 
@@ -539,23 +546,22 @@ def _meta_db_daily_rows(date_from_str: str, date_to_str: str):
 
 
 def fetch_meta_daily(date_from_str: str, date_to_str: str) -> pd.DataFrame:
-    today = today_br().strftime("%Y-%m-%d")
+    fresh_cutoff = (today_br() - timedelta(days=FRESH_DAYS - 1)).strftime("%Y-%m-%d")
     all_rows = []
+    fresh_done = False
 
-    if date_from_str < today:
-        past_to = min(date_to_str, (datetime.strptime(today, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d"))
-        db = _meta_db_daily_rows(date_from_str, past_to)
+    if date_from_str < fresh_cutoff:
+        db_to = min(date_to_str, (datetime.strptime(fresh_cutoff, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d"))
+        db = _meta_db_daily_rows(date_from_str, db_to)
         if db is None:
             all_rows.extend(_meta_api_daily_rows(date_from_str, date_to_str))
-            today_done = True
+            fresh_done = True
         else:
             all_rows.extend(db)
-            today_done = False
-    else:
-        today_done = False
 
-    if not today_done and date_to_str >= today:
-        all_rows.extend(_meta_api_daily_rows(today, date_to_str))
+    if not fresh_done and date_to_str >= fresh_cutoff:
+        api_from = max(date_from_str, fresh_cutoff)
+        all_rows.extend(_meta_api_daily_rows(api_from, date_to_str))
 
     if not all_rows:
         return pd.DataFrame()
