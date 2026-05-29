@@ -15,6 +15,7 @@ Env vars:
 
 import argparse
 import os
+import re
 import sys
 from collections import defaultdict
 from datetime import datetime, timedelta
@@ -154,6 +155,138 @@ def fetch_meta_rows(client_id: str, config: dict, date_from: str, date_to: str) 
 
 
 # ─────────────────────────────────────────────
+# UTM mapping auto-sync
+# ─────────────────────────────────────────────
+UTM_RE = re.compile(r"utm_campaign=([^&\s\"]+)")
+
+
+def _extract_utm(ad: dict) -> str | None:
+    """Extrai utm_campaign de url_tags do ad ou do creative."""
+    for src in [ad.get("url_tags"),
+                (ad.get("creative") or {}).get("url_tags")]:
+        if src:
+            m = UTM_RE.search(src)
+            if m:
+                return m.group(1)
+    oss = (ad.get("creative") or {}).get("object_story_spec") or {}
+    link = (oss.get("link_data") or {}).get("link")
+    if link:
+        m = UTM_RE.search(link)
+        if m:
+            return m.group(1)
+    cta = (oss.get("video_data") or {}).get("call_to_action") or {}
+    val = (cta.get("value") or {}).get("link")
+    if val:
+        m = UTM_RE.search(val)
+        if m:
+            return m.group(1)
+    return None
+
+
+def sync_utm_mappings(sb, client_id: str, meta_config: dict) -> dict:
+    """Lê campanhas + ads ATIVOS no Meta e atualiza utm_mapping
+    (apenas linhas com auto_sync=true ou novas).
+
+    Retorna dict com contadores: created, updated, skipped, no_utm.
+    """
+    token = meta_config["access_token"]
+    accounts = meta_config.get("account_ids", [])
+    api_version = meta_config.get("api_version", "v19.0")
+
+    # 1. Coleta UTMs ATIVAS por campanha do Meta
+    utm_by_campaign: dict[str, set[str]] = defaultdict(set)
+    for acct in accounts:
+        # Lista campanhas (não-deletadas)
+        url = f"https://graph.facebook.com/{api_version}/{acct}/campaigns"
+        params = {
+            "fields": "id,name,effective_status",
+            "effective_status": '["ACTIVE","PAUSED"]',
+            "limit": 500,
+            "access_token": token,
+        }
+        next_url = url
+        first = True
+        camps: list[dict] = []
+        while next_url:
+            try:
+                r = requests.get(next_url, params=params if first else None, timeout=120)
+                r.raise_for_status()
+                body = r.json()
+            except Exception as e:
+                print(f"    Meta campaigns {acct}: erro {e}", file=sys.stderr)
+                break
+            camps.extend(body.get("data", []))
+            next_url = body.get("paging", {}).get("next")
+            first = False
+
+        for camp in camps:
+            camp_name = camp.get("name", "").strip()
+            if not camp_name:
+                continue
+            # Lista ads dessa campanha (todos status; filtramos depois)
+            ads_url = f"https://graph.facebook.com/{api_version}/{camp['id']}/ads"
+            ads_params = {
+                "fields": "name,effective_status,url_tags,creative{url_tags,object_story_spec}",
+                "limit": 500,
+                "access_token": token,
+            }
+            try:
+                r = requests.get(ads_url, params=ads_params, timeout=120)
+                r.raise_for_status()
+                ads_body = r.json()
+            except Exception as e:
+                print(f"    Meta ads {camp_name}: erro {e}", file=sys.stderr)
+                continue
+            for ad in ads_body.get("data", []):
+                if ad.get("effective_status") != "ACTIVE":
+                    continue
+                utm = _extract_utm(ad)
+                if utm:
+                    utm_by_campaign[camp_name].add(utm)
+
+    # 2. Carrega utm_mapping atual desse cliente
+    existing_res = sb.table("utm_mapping").select(
+        "campaign_name, utm_campaigns, auto_sync"
+    ).eq("client_id", client_id).execute()
+    existing = {r["campaign_name"]: r for r in (existing_res.data or [])}
+
+    counts = {"created": 0, "updated": 0, "locked": 0, "no_change": 0, "no_utm": 0}
+
+    # 3. Decide o que fazer por campanha
+    for camp_name, utms in utm_by_campaign.items():
+        if not utms:
+            counts["no_utm"] += 1
+            continue
+        utm_list = sorted(utms)
+        cur = existing.get(camp_name)
+
+        if cur is None:
+            # Nova campanha → INSERT auto_sync=true
+            sb.table("utm_mapping").insert({
+                "client_id": client_id,
+                "campaign_name": camp_name,
+                "utm_campaigns": utm_list,
+                "auto_sync": True,
+            }).execute()
+            counts["created"] += 1
+            print(f"    + criada: {camp_name} -> {utm_list}")
+        elif not cur.get("auto_sync", True):
+            counts["locked"] += 1  # respeita override manual
+        elif set(cur.get("utm_campaigns") or []) == set(utm_list):
+            counts["no_change"] += 1
+        else:
+            sb.table("utm_mapping").update({
+                "utm_campaigns": utm_list,
+                "updated_at": datetime.now(BR_TZ).isoformat(),
+            }).eq("client_id", client_id).eq("campaign_name", camp_name).execute()
+            counts["updated"] += 1
+            old = cur.get("utm_campaigns") or []
+            print(f"    ~ atualizada: {camp_name}  {old} → {utm_list}")
+
+    return counts
+
+
+# ─────────────────────────────────────────────
 # UPSERT
 # ─────────────────────────────────────────────
 def upsert(sb, table: str, rows: list[dict], pk: list[str]):
@@ -205,6 +338,17 @@ def main():
         # Carrega configs (smartico + meta) deste cliente
         sources = sb.table("client_sources").select("source_type,config,active").eq("client_id", client["id"]).execute().data or []
         config_by_type = {s["source_type"]: s["config"] for s in sources if s.get("active", True)}
+
+        # Auto-sync utm_mapping a partir das UTMs ATIVAS no Meta
+        if "meta" in config_by_type:
+            print("  Sincronizando utm_mapping...")
+            try:
+                stats = sync_utm_mappings(sb, client["id"], config_by_type["meta"])
+                print(f"    criadas={stats['created']} atualizadas={stats['updated']} "
+                      f"sem_mudança={stats['no_change']} travadas={stats['locked']} "
+                      f"sem_utm={stats['no_utm']}")
+            except Exception as e:
+                print(f"    ERRO sync utm_mapping: {e}", file=sys.stderr)
 
         # Smartico
         if "smartico" in config_by_type:
