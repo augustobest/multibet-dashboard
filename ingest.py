@@ -160,26 +160,42 @@ def fetch_meta_rows(client_id: str, config: dict, date_from: str, date_to: str) 
 UTM_RE = re.compile(r"utm_campaign=([^&\s\"]+)")
 
 
+def _clean_utm(value: str | None) -> str | None:
+    """Filtra placeholders dinâmicos do Meta (tipo {{campaign.name}})
+    e valores vazios/None."""
+    if not value:
+        return None
+    if "{{" in value or "}}" in value:
+        return None
+    value = value.strip()
+    return value or None
+
+
 def _extract_utm(ad: dict) -> str | None:
-    """Extrai utm_campaign de url_tags do ad ou do creative."""
+    """Extrai utm_campaign de url_tags do ad ou do creative.
+    Ignora templates dinâmicos do Meta."""
     for src in [ad.get("url_tags"),
                 (ad.get("creative") or {}).get("url_tags")]:
         if src:
             m = UTM_RE.search(src)
             if m:
-                return m.group(1)
+                utm = _clean_utm(m.group(1))
+                if utm:
+                    return utm
     oss = (ad.get("creative") or {}).get("object_story_spec") or {}
     link = (oss.get("link_data") or {}).get("link")
     if link:
         m = UTM_RE.search(link)
         if m:
-            return m.group(1)
+            utm = _clean_utm(m.group(1))
+            if utm:
+                return utm
     cta = (oss.get("video_data") or {}).get("call_to_action") or {}
     val = (cta.get("value") or {}).get("link")
     if val:
         m = UTM_RE.search(val)
         if m:
-            return m.group(1)
+            return _clean_utm(m.group(1))
     return None
 
 
