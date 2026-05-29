@@ -159,6 +159,23 @@ def fetch_meta_rows(client_id: str, config: dict, date_from: str, date_to: str) 
 # ─────────────────────────────────────────────
 UTM_RE = re.compile(r"utm_campaign=([^&\s\"]+)")
 
+# UTMs Smartico que devem ser mescladas sob uma chave canônica.
+# Mantém em sincronia com dashboard_meta.py:SM_AGGREGATE e sm-aggregate.ts (SaaS).
+SM_AGGREGATE = {
+    "modal-dep-100": ["modal-dep-100", "modal-dep-100-roas"],
+    "raspadinha":    ["raspadinha-dep-100", "raspadinha-dep-50"],
+    "caixas":        ["caixas-dep-50"],
+}
+_UTM_TO_CANON: dict[str, str] = {}
+for _canon, _variants in SM_AGGREGATE.items():
+    for _v in _variants:
+        _UTM_TO_CANON[_v] = _canon
+
+
+def _canon_utm(u: str) -> str:
+    """Converte variante Smartico pra chave canônica (idêntico ao reconcile)."""
+    return _UTM_TO_CANON.get(u, u)
+
 
 def _clean_utm(value: str | None) -> str | None:
     """Filtra placeholders dinâmicos do Meta (tipo {{campaign.name}})
@@ -258,7 +275,9 @@ def sync_utm_mappings(sb, client_id: str, meta_config: dict) -> dict:
                     continue
                 utm = _extract_utm(ad)
                 if utm:
-                    utm_by_campaign[camp_name].add(utm)
+                    # Canonicaliza (modal-dep-100-roas → modal-dep-100, etc)
+                    # pra reconcile achar nas chaves Smartico
+                    utm_by_campaign[camp_name].add(_canon_utm(utm))
 
     # 2. Carrega utm_mapping atual desse cliente
     existing_res = sb.table("utm_mapping").select(
