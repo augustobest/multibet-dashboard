@@ -19,6 +19,7 @@ import re
 import sys
 from collections import defaultdict
 from datetime import datetime, timedelta
+from urllib.parse import unquote
 
 import requests
 from supabase import create_client
@@ -100,6 +101,42 @@ def fetch_redtrack_ftd_rows(api_key: str, date_from: str, date_to: str) -> dict[
             break
         page += 1
     return grouped
+
+
+def fetch_redtrack_campaign_utm_map(api_key: str, date_from: str, date_to: str) -> dict[str, set[str]]:
+    """Meta campaign_id -> {utm canônicas}, via sub3 (campaign.id) das conversões.
+
+    Necessário pra campanhas "[REDTRACK] ..." cujos anúncios apontam pro link de
+    tracking do RedTrack (sem utm_campaign na URL) — o utm_campaign real só existe
+    na offer de destino, e o vínculo com o campaign_id do Meta vem do macro sub3.
+    """
+    offer_utm = _redtrack_offer_utm_map(api_key)
+    mapping: dict[str, set[str]] = defaultdict(set)
+    page, per = 1, 1000
+    while True:
+        r = requests.get(f"{REDTRACK_URL}/conversions", params={
+            "api_key": api_key,
+            "date_from": date_from,
+            "date_to": date_to,
+            "per": per,
+            "page": page,
+        }, timeout=120)
+        r.raise_for_status()
+        items = r.json().get("items") or []
+        for item in items:
+            if item.get("type") != "sale" or item.get("source") != "Meta":
+                continue
+            camp_id = _clean_utm(item.get("sub3"))
+            if not camp_id:
+                continue
+            utm = offer_utm.get(item.get("offer_id"))
+            if not utm:
+                continue
+            mapping[camp_id].add(_canon_utm(unquote(utm)))
+        if len(items) < per:
+            break
+        page += 1
+    return dict(mapping)
 
 
 # ─────────────────────────────────────────────
@@ -236,12 +273,12 @@ def _canon_utm(u: str) -> str:
 
 def _clean_utm(value: str | None) -> str | None:
     """Filtra placeholders dinâmicos do Meta (tipo {{campaign.name}})
-    e valores vazios/None."""
+    e valores vazios/None. Decodifica percent-encoding (ex: %C3%A7 -> ç)."""
     if not value:
         return None
     if "{{" in value or "}}" in value:
         return None
-    value = value.strip()
+    value = unquote(value).strip()
     return value or None
 
 
@@ -273,12 +310,17 @@ def _extract_utm(ad: dict) -> str | None:
     return None
 
 
-def sync_utm_mappings(sb, client_id: str, meta_config: dict) -> dict:
+def sync_utm_mappings(sb, client_id: str, meta_config: dict,
+                       rt_campaign_utm: dict[str, set[str]] | None = None) -> dict:
     """Lê campanhas + ads ATIVOS no Meta e atualiza utm_mapping
     (apenas linhas com auto_sync=true ou novas).
 
+    `rt_campaign_utm`: Meta campaign_id -> {utm canônicas} vindo do RedTrack
+    (ver fetch_redtrack_campaign_utm_map), mesclado às UTMs extraídas dos anúncios.
+
     Retorna dict com contadores: created, updated, skipped, no_utm.
     """
+    rt_campaign_utm = rt_campaign_utm or {}
     token = meta_config["access_token"]
     accounts = meta_config.get("account_ids", [])
     api_version = meta_config.get("api_version", "v19.0")
@@ -335,6 +377,11 @@ def sync_utm_mappings(sb, client_id: str, meta_config: dict) -> dict:
                     # Canonicaliza (modal-dep-100-roas → modal-dep-100, etc)
                     # pra reconcile achar nas chaves Smartico
                     utm_by_campaign[camp_name].add(_canon_utm(utm))
+
+            # UTMs vindas do RedTrack via campaign_id (sub3) — campanhas cujos
+            # anúncios não têm utm_campaign na URL (redirecionam via RedTrack).
+            for utm in rt_campaign_utm.get(camp["id"], ()):
+                utm_by_campaign[camp_name].add(utm)
 
     # 2. Carrega utm_mapping atual desse cliente
     existing_res = sb.table("utm_mapping").select(
@@ -434,8 +481,14 @@ def main():
         # Auto-sync utm_mapping a partir das UTMs ATIVAS no Meta
         if "meta" in config_by_type:
             print("  Sincronizando utm_mapping...")
+            rt_campaign_utm: dict[str, set[str]] = {}
+            if REDTRACK_API_KEY and client["slug"] == "multibet":
+                try:
+                    rt_campaign_utm = fetch_redtrack_campaign_utm_map(REDTRACK_API_KEY, date_from, date_to)
+                except Exception as e:
+                    print(f"    ERRO RedTrack campaign map: {e}", file=sys.stderr)
             try:
-                stats = sync_utm_mappings(sb, client["id"], config_by_type["meta"])
+                stats = sync_utm_mappings(sb, client["id"], config_by_type["meta"], rt_campaign_utm)
                 print(f"    criadas={stats['created']} atualizadas={stats['updated']} "
                       f"sem_mudança={stats['no_change']} travadas={stats['locked']} "
                       f"sem_utm={stats['no_utm']}")
