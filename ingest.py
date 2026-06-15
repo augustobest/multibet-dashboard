@@ -46,6 +46,63 @@ def num(row: dict, key: str) -> float:
 
 
 # ─────────────────────────────────────────────
+# REDTRACK — FTDs (sales) do Meta, agrupados por (data, utm_campaign)
+# Só roda pro cliente "multibet" enquanto REDTRACK_API_KEY for global.
+# ─────────────────────────────────────────────
+REDTRACK_API_KEY = os.environ.get("REDTRACK_API_KEY")
+REDTRACK_URL = "https://api.redtrack.io"
+
+
+def _redtrack_offer_utm_map(api_key: str) -> dict[str, str]:
+    """offer_id -> utm_campaign, extraído da URL de destino de cada offer."""
+    from urllib.parse import urlparse, parse_qs
+
+    r = requests.get(f"{REDTRACK_URL}/offers", params={"api_key": api_key}, timeout=60)
+    r.raise_for_status()
+    mapping = {}
+    for o in r.json() or []:
+        qs = parse_qs(urlparse(o.get("url") or "").query)
+        utm = (qs.get("utm_campaign") or [None])[0]
+        if utm:
+            mapping[o["id"]] = utm
+    return mapping
+
+
+def fetch_redtrack_ftd_rows(api_key: str, date_from: str, date_to: str) -> dict[tuple[str, str], dict]:
+    """FTDs (conversões type=sale, source=Meta) via RedTrack, agrupados por (data, utm canônica)."""
+    offer_utm = _redtrack_offer_utm_map(api_key)
+    grouped: dict[tuple[str, str], dict] = {}
+    page, per = 1, 1000
+    while True:
+        r = requests.get(f"{REDTRACK_URL}/conversions", params={
+            "api_key": api_key,
+            "date_from": date_from,
+            "date_to": date_to,
+            "per": per,
+            "page": page,
+        }, timeout=120)
+        r.raise_for_status()
+        items = r.json().get("items") or []
+        for item in items:
+            if item.get("type") != "sale" or item.get("source") != "Meta":
+                continue
+            utm = offer_utm.get(item.get("offer_id"))
+            if not utm:
+                continue
+            date = (item.get("conv_time") or "")[:10]
+            if not date:
+                continue
+            key = (date, _canon_utm(utm))
+            agg = grouped.setdefault(key, {"ftd_count": 0, "ftd_total": 0.0})
+            agg["ftd_count"] += 1
+            agg["ftd_total"] += num(item, "payout")
+        if len(items) < per:
+            break
+        page += 1
+    return grouped
+
+
+# ─────────────────────────────────────────────
 # SMARTICO
 # ─────────────────────────────────────────────
 def fetch_smartico_rows(client_id: str, config: dict, date_from: str, date_to: str) -> list[dict]:
@@ -391,6 +448,41 @@ def main():
             try:
                 rows = fetch_smartico_rows(client["id"], config_by_type["smartico"], date_from, date_to)
                 print(f"    {len(rows)} linhas")
+
+                # RedTrack — soma FTDs (sales) do Meta por (data, utm canônica).
+                if REDTRACK_API_KEY and client["slug"] == "multibet":
+                    print("  Buscando RedTrack (FTDs Meta)...")
+                    try:
+                        rt_ftds = fetch_redtrack_ftd_rows(REDTRACK_API_KEY, date_from, date_to)
+                        by_key = {(row["date"], _canon_utm(row["utm_campaign"])): row for row in rows}
+                        for (date, utm), vals in rt_ftds.items():
+                            row = by_key.get((date, utm))
+                            if row is None:
+                                row = {
+                                    "client_id": client["id"],
+                                    "date": date,
+                                    "utm_campaign": utm,
+                                    "registrations": 0,
+                                    "ftd_count": 0,
+                                    "ftd_total": 0.0,
+                                    "deposit_count": 0,
+                                    "deposit_total": 0.0,
+                                    "net_deposits": 0.0,
+                                    "net_pl": 0.0,
+                                    "net_pl_casino": 0.0,
+                                    "net_pl_sport": 0.0,
+                                    "withdrawal_total": 0.0,
+                                    "bonus_amount": 0.0,
+                                    "commissions_total": 0.0,
+                                }
+                                rows.append(row)
+                                by_key[(date, utm)] = row
+                            row["ftd_count"] += vals["ftd_count"]
+                            row["ftd_total"] += vals["ftd_total"]
+                        print(f"    {len(rt_ftds)} grupos (data, utm) com FTDs RedTrack")
+                    except Exception as e:
+                        print(f"    ERRO RedTrack: {e}", file=sys.stderr)
+
                 upsert(sb, "smartico_daily", rows, ["client_id", "date", "utm_campaign"])
             except Exception as e:
                 print(f"    ERRO Smartico: {e}", file=sys.stderr)
