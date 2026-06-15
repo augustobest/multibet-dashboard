@@ -41,6 +41,7 @@ jobs:
         env:
           SUPABASE_URL:          ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY:  ${{ secrets.SUPABASE_SERVICE_KEY }}
+          REDTRACK_API_KEY:      ${{ secrets.REDTRACK_API_KEY }}
         run: |
           ARGS=""
           if [ -n "${{ github.event.inputs.date_from }}" ]; then
