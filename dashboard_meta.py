@@ -8,6 +8,7 @@ import plotly.graph_objects as go
 import requests
 from datetime import datetime, timedelta
 from collections import defaultdict
+from urllib.parse import urlparse, parse_qs
 from tz_utils import today_br, now_br
 
 # Quantos dias recentes (hoje + N-1) puxam direto da API ao vivo.
@@ -38,7 +39,7 @@ SMARTICO_URL  = "https://boapi3.smartico.ai"
 SMARTICO_KEY  = st.secrets.get("SMARTICO_KEY", "60d30870-42fa-11f1-85e6-027e66b7665d-12072")
 AFFILIATE_ID  = 464673
 
-META_ACCESS_TOKEN = st.secrets.get("META_ACCESS_TOKEN", "EAASFqlKv054BRQredZAPZBOVxA3ztZBZC8C8ZB5oV0ZC1G9qGZB3YzFRZAXWnW6WtwhjYne3bdoO8Afo19en1tMrijMwF6h1mzwplbWwn6R0etsboWyJHqdeUzlWBS09DQjXQd6ttSJ6SW9wTCSK60ZCXnwa3vvhNaBmUKTy30XciUOg6EsrgTGrMayz6AgignNfondWM")
+META_ACCESS_TOKEN = st.secrets.get("META_ACCESS_TOKEN", "EAAVDJqZBQ6gYBRsu4ZCvJZAGSOSk1LDaWoOt1r4ddv8nURl1CQ2AvE7ysDce9TZAzTqQ5qldC8a26ZBgKLRK5XIumuL3BC6ZCPggKNZBIkCyg6AcCMcRdAkLNryZBFj2VOfbXou9tgIETlCIZANrVJMLs99I3w94OrQ2LwgOb4Mt0E3COSku5Ilo0cnhZBIFRn9O5IYnsBr22wgEpVvZBGST0z3")
 META_AD_ACCOUNT_IDS = [
     "act_1418521646228655",   # Multibet
     "act_3506962756106082",   # Multibet
@@ -49,6 +50,9 @@ META_AD_ACCOUNT_IDS = [
 META_API_VERSION = "v19.0"
 REFRESH_MIN  = 30
 DEFAULT_DAYS = 15
+
+REDTRACK_API_KEY = st.secrets.get("REDTRACK_API_KEY", "iKSOCyw3PDpY3hj03HRl")
+REDTRACK_URL     = "https://api.redtrack.io"
 
 # Campanha Meta → UTMs no Smartico (carregado do banco via load_utm_mapping)
 # Cache TTL 5min: edita em utm_mapping no Supabase → em 5min reflete na dash
@@ -388,6 +392,62 @@ def fetch_utm_activity_monitor(lookback_days: int = 90) -> pd.DataFrame:
     dt_from = (today_br() - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
     dt_to   = today_br().strftime("%Y-%m-%d")
     return fetch_smartico_daily(dt_from, dt_to)
+
+
+# ─────────────────────────────────────────────
+# REDTRACK FETCH (FTDs do Meta — somados aos da Smartico)
+# ─────────────────────────────────────────────
+@st.cache_data(ttl=REFRESH_MIN * 60, show_spinner=False)
+def _redtrack_offer_utm_map() -> dict[str, str]:
+    """offer_id -> utm_campaign, extraído da URL de destino de cada offer."""
+    try:
+        r = requests.get(f"{REDTRACK_URL}/offers", params={"api_key": REDTRACK_API_KEY}, timeout=30)
+        offers = r.json()
+    except Exception as e:
+        st.warning(f"Falha ao carregar offers RedTrack: {e}")
+        return {}
+    mapping = {}
+    for o in offers or []:
+        qs = parse_qs(urlparse(o.get("url") or "").query)
+        utm = (qs.get("utm_campaign") or [None])[0]
+        if utm:
+            mapping[o["id"]] = utm
+    return mapping
+
+
+@st.cache_data(ttl=REFRESH_MIN * 60, show_spinner=False)
+def fetch_redtrack_meta_ftds(date_from_str: str, date_to_str: str) -> dict[str, dict]:
+    """FTDs (sales) do Meta via RedTrack, agrupados por UTM (mesma UTM da Smartico)."""
+    offer_utm = _redtrack_offer_utm_map()
+    result: dict[str, dict] = defaultdict(lambda: {"ftd_count": 0, "ftd_total": 0.0})
+    page, per = 1, 1000
+    while True:
+        try:
+            r = requests.get(f"{REDTRACK_URL}/conversions", params={
+                "api_key": REDTRACK_API_KEY,
+                "date_from": date_from_str,
+                "date_to": date_to_str,
+                "per": per,
+                "page": page,
+            }, timeout=60)
+            body = r.json()
+        except Exception as e:
+            st.warning(f"Falha ao carregar conversions RedTrack: {e}")
+            break
+        items = body.get("items") or []
+        for item in items:
+            if item.get("type") != "sale" or item.get("source") != "Meta":
+                continue
+            utm = offer_utm.get(item.get("offer_id"))
+            if not utm:
+                continue
+            utm = _apply_sm_aggregate(utm)
+            result[utm]["ftd_count"] += 1
+            result[utm]["ftd_total"] += float(item.get("payout") or 0)
+        if len(items) < per:
+            break
+        page += 1
+    return dict(result)
 
 
 # ─────────────────────────────────────────────
@@ -893,6 +953,11 @@ def main():
     # ── FETCH DATA ──────────────────────────────
     with st.spinner("Carregando dados..."):
         sm_data          = fetch_smartico(date_from_str, date_to_str)
+        rt_ftds          = fetch_redtrack_meta_ftds(date_from_str, date_to_str)
+        for utm, vals in rt_ftds.items():
+            bucket = sm_data.setdefault(utm, defaultdict(float))
+            bucket["ftd_count"] += vals["ftd_count"]
+            bucket["ftd_total"] += vals["ftd_total"]
         meta_insights    = fetch_meta_insights(date_from_str, date_to_str)
         campaign_budgets = fetch_meta_campaigns()
         df_main, df_unmatched = reconcile(sm_data, meta_insights)
