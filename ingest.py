@@ -47,6 +47,30 @@ def num(row: dict, key: str) -> float:
 
 
 # ─────────────────────────────────────────────
+# Descriptografia de config (espelha src/lib/crypto.ts do multibet-saas):
+# AES-256-GCM, payload base64 = iv[12] + tag[16] + ciphertext.
+# Configs salvos pela UI nova vêm como {"v":1,"data":"..."}; os antigos
+# vêm em texto puro. Fallback pra plaintext = mesmo comportamento do
+# decryptConfig do app (compat com configs pré-criptografia).
+# ─────────────────────────────────────────────
+def decrypt_config(raw: dict) -> dict:
+    if not (isinstance(raw, dict) and raw.get("v") == 1 and isinstance(raw.get("data"), str)):
+        return raw  # texto puro (compat)
+    import base64
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    import json as _json
+
+    hex_key = os.environ.get("ENCRYPTION_KEY")
+    if not hex_key or len(hex_key) != 64:
+        raise RuntimeError("ENCRYPTION_KEY (64 hex) ausente — necessária pra ler config criptografado.")
+    key = bytes.fromhex(hex_key)
+    buf = base64.b64decode(raw["data"])
+    iv, tag, ct = buf[:12], buf[12:28], buf[28:]
+    plain = AESGCM(key).decrypt(iv, ct + tag, None)  # AESGCM espera ciphertext+tag
+    return _json.loads(plain.decode("utf-8"))
+
+
+# ─────────────────────────────────────────────
 # REDTRACK — FTDs (sales) do Meta, agrupados por (data, utm_campaign)
 # Só roda pro cliente "multibet" enquanto REDTRACK_API_KEY for global.
 # ─────────────────────────────────────────────
@@ -476,7 +500,7 @@ def main():
 
         # Carrega configs (smartico + meta) deste cliente
         sources = sb.table("client_sources").select("source_type,config,active").eq("client_id", client["id"]).execute().data or []
-        config_by_type = {s["source_type"]: s["config"] for s in sources if s.get("active", True)}
+        config_by_type = {s["source_type"]: decrypt_config(s["config"]) for s in sources if s.get("active", True)}
 
         # Auto-sync utm_mapping a partir das UTMs ATIVAS no Meta
         if "meta" in config_by_type:

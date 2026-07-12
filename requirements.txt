@@ -4,3 +4,4 @@ plotly==5.24.1
 requests
 streamlit-autorefresh
 supabase>=2.9.0
+cryptography>=42.0.0
