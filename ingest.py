@@ -500,7 +500,15 @@ def main():
 
         # Carrega configs (smartico + meta) deste cliente
         sources = sb.table("client_sources").select("source_type,config,active").eq("client_id", client["id"]).execute().data or []
-        config_by_type = {s["source_type"]: decrypt_config(s["config"]) for s in sources if s.get("active", True)}
+        config_by_type = {}
+        for s in sources:
+            if not s.get("active", True):
+                continue
+            try:
+                config_by_type[s["source_type"]] = decrypt_config(s["config"])
+            except Exception as e:
+                # config de uma fonte ilegível não derruba as outras nem os outros clientes
+                print(f"    ERRO decrypt {s['source_type']}: {e}", file=sys.stderr)
 
         # Auto-sync utm_mapping a partir das UTMs ATIVAS no Meta
         if "meta" in config_by_type:
